@@ -21,7 +21,7 @@
 //     create: ({ apiKey }) => new MyProvider(apiKey),
 //   });
 
-import { Type } from "typebox";
+import type { TUnsafe } from "typebox";
 import type { Provider, ProviderMeta } from "./providers/types.js";
 
 export type {
@@ -222,14 +222,23 @@ export function getRegisteredUserProviderNames(): string[] {
 
 /**
  * String enum schema helper compatible with providers that do not support
- * anyOf/const patterns. Replaces the equivalent helper from pi-ai so this
- * package does not depend on it.
+ * anyOf/const patterns. Constructs TypeBox's unsafe schema shape without a
+ * runtime import so the user-adapter Jiti loader stays independent of Pi's
+ * virtual core modules.
  */
-export function StringEnum(values: readonly string[], options?: { description?: string; default?: string }) {
-	return Type.Unsafe({
+export function StringEnum(values: readonly string[], options?: { description?: string; default?: string }): TUnsafe {
+	const schema = {
+		"~unsafe": null,
 		type: "string",
-		enum: values,
+		enum: [...values],
 		...(options?.description && { description: options.description }),
 		...(options?.default && { default: options.default }),
+	};
+	Object.defineProperty(schema, "~unsafe", {
+		configurable: true,
+		writable: true,
+		enumerable: false,
+		value: null,
 	});
+	return schema;
 }

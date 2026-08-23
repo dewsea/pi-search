@@ -18,6 +18,7 @@ const nestedNpmEnvironment = Object.fromEntries(
 nestedNpmEnvironment.npm_config_dry_run = "false";
 
 const requiredPiPeers = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "typebox"];
+const customProviderName = "artifact-custom";
 
 const requiredFiles = [
 	"package.json",
@@ -149,10 +150,14 @@ async function run() {
 	);
 
 	for (const name of peerNames) {
+		if (name === "typebox") continue;
 		const source = join(repositoryRoot, "node_modules", name);
 		const target = join(consumerRoot, "node_modules", name);
 		mkdirSync(dirname(target), { recursive: true });
 		symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+	}
+	if (existsSync(join(consumerRoot, "node_modules", "typebox"))) {
+		throw new Error("artifact consumer must not contain a physical typebox package");
 	}
 
 	const packageRoot = join(consumerRoot, "node_modules", repositoryPackage.name);
@@ -167,8 +172,71 @@ async function run() {
 		throw new Error("installed artifact has an unexpected Pi extension manifest");
 	}
 
+	const agentRoot = join(temporaryRoot, "agent");
+	const adapterDirectory = join(agentRoot, "extensions", "pi-search", "providers");
+	mkdirSync(adapterDirectory, { recursive: true });
+	writeFileSync(
+		join(adapterDirectory, `${customProviderName}.ts`),
+		`import { defineProvider } from "@hyav/pi-search";
+
+export default defineProvider({
+	name: ${JSON.stringify(customProviderName)},
+	label: "Artifact Custom",
+	envVar: "ARTIFACT_CUSTOM_API_KEY",
+	capabilities: {
+		generalSearch: true,
+		verticalSearch: false,
+		contentExtraction: false,
+		crawl: false,
+		siteMap: false,
+		deepResearch: false,
+		batchSearch: false,
+		hasMetadata: false,
+	},
+	searchHint: "Production artifact adapter check",
+	searchFallbackPriority: 99,
+	apiKeyRequired: false,
+	create: () => ({
+		name: ${JSON.stringify(customProviderName)},
+		label: "Artifact Custom",
+		capabilities: {
+			generalSearch: true,
+			verticalSearch: false,
+			contentExtraction: false,
+			crawl: false,
+			siteMap: false,
+			deepResearch: false,
+			batchSearch: false,
+			hasMetadata: false,
+		},
+		async search() { return { results: [] }; },
+	}),
+});
+`,
+		"utf8",
+	);
+
 	const extensionPath = join(packageRoot, "index.ts");
-	const result = await discoverAndLoadExtensions([extensionPath], packageRoot, packageRoot);
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const previousWarn = console.warn;
+	const adapterWarnings = [];
+	let result;
+	try {
+		process.env.PI_CODING_AGENT_DIR = agentRoot;
+		console.warn = (...args) => {
+			const message = args.map(String).join(" ");
+			if (message.includes("[pi-search] failed to load adapter")) adapterWarnings.push(message);
+			previousWarn(...args);
+		};
+		result = await discoverAndLoadExtensions([extensionPath], packageRoot, packageRoot);
+	} finally {
+		console.warn = previousWarn;
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	}
+	if (adapterWarnings.length > 0) {
+		throw new Error(`published custom adapter failed without a physical typebox peer: ${adapterWarnings.join("; ")}`);
+	}
 	if (result.errors.length > 0) {
 		throw new Error(`published Pi entry point failed to load: ${JSON.stringify(result.errors)}`);
 	}
@@ -195,6 +263,11 @@ async function run() {
 		}
 	}
 	const searchDefinition = extension.tools.get("web_search")?.definition;
+	const searchProviderSchema = searchDefinition?.parameters.properties.provider;
+	const searchProviderNames = searchProviderSchema?.anyOf?.[0]?.enum ?? searchProviderSchema?.enum;
+	if (!searchProviderNames?.includes(customProviderName)) {
+		throw new Error(`published custom adapter was not registered: ${customProviderName}`);
+	}
 	if (searchDefinition?.parameters.properties.max_results.type !== "integer") {
 		throw new Error("web_search max_results must use an integer schema");
 	}

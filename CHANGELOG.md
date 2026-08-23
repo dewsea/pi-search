@@ -4,6 +4,9 @@ This file is the authoritative user-facing release history for `@hyav/pi-search`
 
 ## Unreleased
 
+## 0.1.3 - 2026-08-24
+
+- Fixed custom provider adapters failing to load in compiled Pi installs when `typebox` is supplied by the host instead of installed as a physical package.
 - Added repository-only reference adapters for DeepSeek, Doubao Search, Exa, Firecrawl, Gemini, iFlow, and Serper under `examples/search-providers/`; they remain excluded from built-in registration and the npm artifact.
 
 ## 0.1.2 - 2026-08-17
