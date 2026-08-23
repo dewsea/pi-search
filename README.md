@@ -88,7 +88,7 @@ export default defineProvider({
 });
 ```
 
-See the [adapter extension contract](https://github.com/hyav/pi-search/blob/main/docs/adapter-extensions.md) for the full file shape, validation rules, conflicts, and reload behavior. The built-in providers under the package's `src/providers/` are reference templates with this exact shape — copy one and customize it. Adapter files must not runtime-import Pi's bundled packages (`@earendil-works/*`); type-only imports are fine. Add, remove, or modify files, then run `/reload` to rediscover them without touching the package.
+See the [adapter extension contract](https://github.com/hyav/pi-search/blob/main/docs/adapter-extensions.md) for the full file shape, validation rules, conflicts, and reload behavior. The built-in providers under the package's `src/providers/` are reference templates with this exact shape — copy one and customize it. A repository-only collection of non-built-in DeepSeek, Doubao Search, Exa, Firecrawl, Gemini, iFlow, and Serper adapters is available under [`examples/search-providers`](examples/search-providers/). Adapter files must not runtime-import Pi's bundled packages (`@earendil-works/*`); type-only imports are fine. Add, remove, or modify files, then run `/reload` to rediscover them without touching the package.
 
 Adapter files run with your full system privileges and can execute arbitrary code — only install adapters from sources you trust.
 

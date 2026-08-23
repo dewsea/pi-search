@@ -2,6 +2,10 @@
 
 This file is the authoritative user-facing release history for `@hyav/pi-search`.
 
+## Unreleased
+
+- Added repository-only reference adapters for DeepSeek, Doubao Search, Exa, Firecrawl, Gemini, iFlow, and Serper under `examples/search-providers/`; they remain excluded from built-in registration and the npm artifact.
+
 ## 0.1.2 - 2026-08-17
 
 - Added file-level plug-and-play custom provider adapters: drop a `defineProvider()` file into `<agent-dir>/extensions/pi-search/providers/` and run `/reload` to rediscover; same-name adapters override built-ins, deleted adapters disappear on reload, and edited files are re-read.

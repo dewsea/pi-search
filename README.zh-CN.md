@@ -87,7 +87,7 @@ export default defineProvider({
 });
 ```
 
-完整的文件形态、校验规则、冲突与重载行为见[适配器契约文档](https://github.com/hyav/pi-search/blob/main/docs/adapter-extensions.md)。包内 `src/providers/` 下的内置 Provider 即此形态的参考模板——复制一份按需修改即可。适配器文件不得在运行时导入 Pi 捆绑包（`@earendil-works/*`），仅类型导入不受限。增删改文件后执行 `/reload` 即可重新发现，无需改动包本身。
+完整的文件形态、校验规则、冲突与重载行为见[适配器契约文档](https://github.com/hyav/pi-search/blob/main/docs/adapter-extensions.md)。包内 `src/providers/` 下的内置 Provider 即此形态的参考模板——复制一份按需修改即可。仓库内 [`examples/search-providers`](examples/search-providers/) 还提供不会默认启用的 DeepSeek、豆包搜索、Exa、Firecrawl、Gemini、iFlow 与 Serper 适配器参考实现。适配器文件不得在运行时导入 Pi 捆绑包（`@earendil-works/*`），仅类型导入不受限。增删改文件后执行 `/reload` 即可重新发现，无需改动包本身。
 
 适配器文件以你的完整系统权限运行，可执行任意代码——只安装你信任来源的适配器。
 

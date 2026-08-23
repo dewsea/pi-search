@@ -3,6 +3,10 @@
 		"target": "ES2022",
 		"module": "Node16",
 		"moduleResolution": "Node16",
+		"baseUrl": ".",
+		"paths": {
+			"@hyav/pi-search": ["./src/adapter-api.ts"]
+		},
 		"strict": true,
 		"esModuleInterop": true,
 		"skipLibCheck": true,
@@ -13,5 +17,5 @@
 		"rewriteRelativeImportExtensions": true,
 		"noEmit": true
 	},
-	"include": ["src/**/*.ts", "test/**/*.ts", "index.ts"]
+	"include": ["src/**/*.ts", "test/**/*.ts", "examples/**/*.ts", "index.ts"]
 }

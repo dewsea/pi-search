@@ -86,4 +86,4 @@ export default defineProvider({
 
 ## 参考模板
 
-包内 `src/providers/` 下的内置 Provider（`tavily.ts`、`anysearch.ts`、`jina.ts`）即此形态的参考模板——复制一份按需修改即可。`src/adapter-loader.ts` 是发现机制的实现参考。
+包内 `src/providers/` 下的内置 Provider（`tavily.ts`、`anysearch.ts`、`jina.ts`）即此形态的参考模板——复制一份按需修改即可。仓库内 [`examples/search-providers`](../examples/search-providers/) 还提供不会默认启用的 DeepSeek、豆包搜索、Exa、Firecrawl、Gemini、iFlow 与 Serper 完整参考实现。`src/adapter-loader.ts` 是发现机制的实现参考。

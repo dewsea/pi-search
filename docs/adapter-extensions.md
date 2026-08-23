@@ -116,5 +116,7 @@ from disk; removed files disappear; broken files are skipped with a warning.
 
 The built-in providers under the package's `src/providers/` (`tavily.ts`,
 `anysearch.ts`, `jina.ts`) are reference templates with this exact shape —
-copy one and customize it. `src/adapter-loader.ts` documents the discovery
-implementation.
+copy one and customize it. Complete non-built-in references for DeepSeek,
+Doubao Search, Exa, Firecrawl, Gemini, iFlow, and Serper live under
+[`examples/search-providers`](../examples/search-providers/). `src/adapter-loader.ts`
+documents the discovery implementation.

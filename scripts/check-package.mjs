@@ -62,7 +62,15 @@ function assertArtifactFiles(files) {
 		if (!files.includes(file)) throw new Error(`npm artifact is missing ${file}`);
 	}
 
-	const forbiddenPrefixes = ["test/", "scripts/", "pi-search/", "pi-search-kit/", "docs/", "node_modules/"];
+	const forbiddenPrefixes = [
+		"test/",
+		"examples/",
+		"scripts/",
+		"pi-search/",
+		"pi-search-kit/",
+		"docs/",
+		"node_modules/",
+	];
 	for (const file of files) {
 		if (forbiddenPrefixes.some((prefix) => file.startsWith(prefix))) {
 			throw new Error(`npm artifact contains repository-only path ${file}`);
