@@ -4,6 +4,10 @@ This file is the authoritative user-facing release history for `@hyav/pi-search`
 
 ## Unreleased
 
+- Clarified `web_search` and `web_fetch` guidance to omit `provider` by default so automatic fallback remains active; explicit provider selection remains strict.
+- Made `research=true` use Tavily for both its research report and supporting search sources, reject incompatible vertical searches, avoid caching inconclusive empty results, and honor `config.defaults.max_results` when `max_results` is omitted.
+- Fixed `web_search` and `web_fetch` exceeding their output limits after adding headers or truncation notices; complete responses now stay within 2,000 lines and 50 KiB, while temporary files preserve the full search output or unmodified fetched content.
+
 ## 0.1.3 - 2026-08-24
 
 - Fixed custom provider adapters failing to load in compiled Pi installs when `typebox` is supplied by the host instead of installed as a physical package.

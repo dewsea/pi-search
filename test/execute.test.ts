@@ -4,7 +4,7 @@ import type { FetchResponse, Provider, ProviderCapabilities, SearchResponse } fr
 import { executeFetch } from "../src/web-fetch.js";
 // We import the extracted execute functions — they don't exist yet (RED).
 // Import paths will be confirmed once we extract them.
-import { assertResearchAvailable, executeSearch, searchCache } from "../src/web-search.js";
+import { assertResearchAvailable, executeSearch, resolveMaxResults, searchCache } from "../src/web-search.js";
 
 beforeEach(() => {
 	searchCache.clear();
@@ -78,6 +78,20 @@ describe("web_search research prerequisites", () => {
 	});
 });
 
+describe("resolveMaxResults", () => {
+	it("uses a configured default only when max_results is omitted", () => {
+		assert.strictEqual(resolveMaxResults(undefined, { defaults: { max_results: 7 } }), 7);
+		assert.strictEqual(resolveMaxResults(3, { defaults: { max_results: 7 } }), 3);
+	});
+
+	it("normalizes invalid configured defaults within the supported range", () => {
+		assert.strictEqual(resolveMaxResults(undefined, { defaults: { max_results: 0 } }), 1);
+		assert.strictEqual(resolveMaxResults(undefined, { defaults: { max_results: 99 } }), 20);
+		assert.strictEqual(resolveMaxResults(undefined, { defaults: { max_results: 3.8 } }), 3);
+		assert.strictEqual(resolveMaxResults(undefined, { defaults: { max_results: Number.NaN } }), 5);
+	});
+});
+
 describe("executeSearch — explicit provider requested", () => {
 	const tavily = mockProvider("tavily", {
 		capabilities: { generalSearch: true, contentExtraction: true },
@@ -141,10 +155,60 @@ describe("executeSearch — fallback chain without explicit provider", () => {
 		await assert.rejects(executeSearch(providersMap(err1), "test", 5, {}), /All providers failed/);
 	});
 
-	it("returns definitive zero results when all providers return empty arrays", async () => {
-		const result = await executeSearch(providersMap(emptyProvider), "nothing", 5, {});
-		assert.deepStrictEqual(result.results, []);
-		assert.strictEqual(result.provider, "tavily");
+	it("returns and caches definitive zero results when all providers return empty arrays", async () => {
+		let calls = 0;
+		const empty: Provider = {
+			name: "tavily",
+			label: "tavily",
+			capabilities: { ...baseCapabilities, generalSearch: true },
+			search: async () => {
+				calls++;
+				return { results: [] };
+			},
+		};
+		const providers = providersMap(empty);
+
+		const first = await executeSearch(providers, "nothing", 5, {});
+		const second = await executeSearch(providers, "nothing", 5, {});
+		assert.deepStrictEqual(first.results, []);
+		assert.strictEqual(first.provider, "tavily");
+		assert.deepStrictEqual(second, first);
+		assert.strictEqual(calls, 1, "a definitive empty result should be cached");
+	});
+
+	it("does not cache an empty result when another provider fails", async () => {
+		let emptyCalls = 0;
+		let failedCalls = 0;
+		const empty: Provider = {
+			name: "tavily",
+			label: "tavily",
+			capabilities: { ...baseCapabilities, generalSearch: true },
+			search: async () => {
+				emptyCalls++;
+				return { results: [] };
+			},
+		};
+		const broken: Provider = {
+			name: "anysearch",
+			label: "anysearch",
+			capabilities: { ...baseCapabilities, generalSearch: true },
+			search: async () => {
+				failedCalls++;
+				throw new Error("temporary anysearch failure");
+			},
+		};
+		const providers = providersMap(empty, broken);
+
+		await assert.rejects(
+			executeSearch(providers, "inconclusive", 5, {}),
+			/Search was inconclusive.*anysearch: temporary anysearch failure/s,
+		);
+		await assert.rejects(
+			executeSearch(providers, "inconclusive", 5, {}),
+			/Search was inconclusive.*anysearch: temporary anysearch failure/s,
+		);
+		assert.strictEqual(emptyCalls, 2, "an inconclusive result must not be cached");
+		assert.strictEqual(failedCalls, 2, "the failed provider must be retried");
 	});
 
 	it("propagates caller cancellation without invoking subsequent providers", async () => {

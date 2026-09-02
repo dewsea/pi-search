@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { loadConfig, resolveApiKey, type SearchConfig } from "../src/config.js";
+import { resolveMaxResults } from "../src/web-search.js";
 
 describe("API Key Resolution Logic (resolveApiKey)", () => {
 	const mockConfig: SearchConfig = {
@@ -73,6 +74,19 @@ describe("API Key Resolution Logic (resolveApiKey)", () => {
 			} else {
 				process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 			}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("should load defaults.max_results for web_search", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-search-config-"));
+		const configPath = join(dir, "config.json");
+		try {
+			writeFileSync(configPath, JSON.stringify({ defaults: { max_results: 8 } }));
+			const config = loadConfig(configPath);
+			assert.strictEqual(config.defaults?.max_results, 8);
+			assert.strictEqual(resolveMaxResults(undefined, config), 8);
+		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

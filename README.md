@@ -35,17 +35,23 @@ Built-in Tavily and AnySearch search and Jina extraction work without API keys. 
 | AnySearch | `ANYSEARCH_API_KEY` | Authenticates general, vertical, and extraction requests |
 | Jina | `JINA_API_KEY` | Authenticates web and PDF extraction |
 
-Environment variables take precedence over `<agent-dir>/extensions/pi-search/config.json`, where `<agent-dir>` is `PI_CODING_AGENT_DIR` or `~/.pi/agent` (XDG layouts such as `$XDG_CONFIG_HOME/pi/agent` work through `PI_CODING_AGENT_DIR`). Keep credential files readable only by your user.
+Environment variables take precedence over `<agent-dir>/extensions/pi-search/config.json`, where `<agent-dir>` is `PI_CODING_AGENT_DIR` or `~/.pi/agent` (XDG layouts such as `$XDG_CONFIG_HOME/pi/agent` work through `PI_CODING_AGENT_DIR`). Keep credential files readable only by your user. The optional `defaults.max_results` integer sets the `web_search` default when a call omits `max_results` (valid range: 1–20):
+
+```json
+{
+  "defaults": { "max_results": 8 }
+}
+```
 
 
 ## Use
 
-The model calls `web_search` and `web_fetch` directly. Without an explicit provider, the fallback order is:
+The model calls `web_search` and `web_fetch` directly. Omit `provider` by default to keep automatic fallback enabled; set it only when the user explicitly requests a provider or a provider-specific capability is required. Without an explicit provider, the fallback order is:
 
 - Search: Tavily → AnySearch
 - Extraction: Tavily → Jina → AnySearch
 
-An explicitly selected provider never falls back silently; its failure is returned directly. If no configured or keyless providers match the requested capability, the tool fails with an explicit actionable error message.
+An explicitly selected provider never falls back silently; its failure is returned directly. `research=true` is Tavily-only: both supporting search sources and the report come from Tavily, and it cannot be combined with `vertical`. If no configured or keyless providers match the requested capability, the tool fails with an explicit actionable error message.
 
 ## Custom providers
 

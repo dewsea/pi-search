@@ -35,16 +35,22 @@ pi install npm:@hyav/pi-search
 | AnySearch | `ANYSEARCH_API_KEY` | 鉴权通用搜索、垂直搜索和内容抽取请求 |
 | Jina | `JINA_API_KEY` | 鉴权网页与 PDF 抽取请求 |
 
-环境变量优先于 `<agent-dir>/extensions/pi-search/config.json`，其中 `<agent-dir>` 为 `PI_CODING_AGENT_DIR` 或 `~/.pi/agent`（`$XDG_CONFIG_HOME/pi/agent` 等 XDG 布局通过 `PI_CODING_AGENT_DIR` 生效）。凭据文件应限制为仅当前用户可读。
+环境变量优先于 `<agent-dir>/extensions/pi-search/config.json`，其中 `<agent-dir>` 为 `PI_CODING_AGENT_DIR` 或 `~/.pi/agent`（`$XDG_CONFIG_HOME/pi/agent` 等 XDG 布局通过 `PI_CODING_AGENT_DIR` 生效）。凭据文件应限制为仅当前用户可读。可选的整数配置 `defaults.max_results` 会在调用 `web_search` 时未传 `max_results` 的情况下作为默认值（有效范围：1–20）：
+
+```json
+{
+  "defaults": { "max_results": 8 }
+}
+```
 
 ## 使用
 
-模型直接调用 `web_search` 和 `web_fetch`。未显式指定 Provider 时，降级顺序为：
+模型直接调用 `web_search` 和 `web_fetch`。默认应省略 `provider` 以启用自动降级；仅在用户明确指定 Provider 或确实需要某个 Provider 的专有能力时传入。未显式指定 Provider 时，降级顺序为：
 
 - 搜索：Tavily → AnySearch
 - 提取：Tavily → Jina → AnySearch
 
-显式选择 Provider 后不会静默降级；失败会直接返回。若当前无匹配能力的已配置或免 Key Provider，工具会抛出明确的错误提示。
+显式选择 Provider 后不会静默降级；失败会直接返回。`research=true` 仅使用 Tavily：支持来源与研究报告均来自 Tavily，且不能与 `vertical` 组合。若当前无匹配能力的已配置或免 Key Provider，工具会抛出明确的错误提示。
 
 ## 自定义 Provider
 

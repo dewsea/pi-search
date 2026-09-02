@@ -3,22 +3,18 @@
 // Routes to the best available provider for content extraction, with SSRF
 // protection, large-response spillover, and optional raw HTML mode.
 
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
 	type TruncationResult,
-	truncateHead,
-	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { StringEnum } from "./adapter-api.js";
 import { loadConfig, resolveApiKey } from "./config.js";
+import { limitToolOutput } from "./output.js";
 import {
 	buildFetchChain,
 	createAvailableProviders,
@@ -31,9 +27,6 @@ import { assertSafeDns, cleanHtmlToMarkdown, fetchWithRetry, SafeMemoryCache, va
 
 // Global fetch cache instance: TTL 5 minutes, capacity 100 entries
 export const fetchCache = new SafeMemoryCache<{ result: FetchResponse; provider: string }>(300000, 100);
-
-const FETCH_TEMP_PREFIX = "pisearch-fetch-";
-const FETCH_TEMP_FILE = "content.txt";
 
 export interface FetchExecuteOpts {
 	provider?: string;
@@ -122,34 +115,6 @@ export function normalizeDirectResponse(rawText: string, contentType: string, ra
 		return { text: cleanHtmlToMarkdown(rawText), contentType: "text/markdown" };
 	}
 	return { text: rawText, contentType: contentType || undefined };
-}
-
-async function spillToTemp(content: string, signal?: AbortSignal): Promise<string> {
-	signal?.throwIfAborted();
-	const dir = await mkdtemp(join(tmpdir(), FETCH_TEMP_PREFIX));
-	const file = join(dir, FETCH_TEMP_FILE);
-	await withFileMutationQueue(file, async () => {
-		signal?.throwIfAborted();
-		try {
-			await writeFile(file, content, { encoding: "utf8", mode: 0o600, signal });
-		} catch (error) {
-			signal?.throwIfAborted();
-			throw error;
-		}
-	});
-	signal?.throwIfAborted();
-	return file;
-}
-
-function formatTruncationFooter(t: TruncationResult, tempFile: string): string {
-	const skippedLines = t.totalLines - t.outputLines;
-	const skippedBytes = t.totalBytes - t.outputBytes;
-	return (
-		`\n\n[Truncated: ${t.outputLines}/${t.totalLines} lines` +
-		` (${formatSize(t.outputBytes)}/${formatSize(t.totalBytes)}).` +
-		` ${skippedLines} lines (${formatSize(skippedBytes)}) omitted.` +
-		` Full content: ${tempFile}]`
-	);
 }
 
 export function registerWebFetchTool(pi: ExtensionAPI): void {
@@ -243,28 +208,25 @@ export function registerWebFetchTool(pi: ExtensionAPI): void {
 				fetchCache.set(cacheKey, { result, provider });
 			}
 
-			const truncation = truncateHead(result.text, {
-				maxLines: DEFAULT_MAX_LINES,
-				maxBytes: DEFAULT_MAX_BYTES,
-			});
-
-			const details: FetchDetails = { url, provider, raw, title: result.title, contentType: result.contentType };
-
-			let output = truncation.content;
-			if (truncation.truncated) {
-				const tempFile = await spillToTemp(result.text, signal);
-				details.truncation = truncation;
-				details.fullOutputPath = tempFile;
-				output += formatTruncationFooter(truncation, tempFile);
-			}
-
 			const header = [`**URL:** ${url}`, `**Provider:** ${provider}`];
 			if (result.title) header.push(`**Title:** ${result.title}`);
 			if (raw) header.push("**Mode:** raw");
 			header.push("");
 
+			// Bound the complete response while keeping saved content (including raw HTML) unchanged.
+			const limited = await limitToolOutput(header.join("\n") + result.text, signal, result.text);
+			const details: FetchDetails = {
+				url,
+				provider,
+				raw,
+				title: result.title,
+				contentType: result.contentType,
+				truncation: limited.truncation,
+				fullOutputPath: limited.fullOutputPath,
+			};
+
 			return {
-				content: [{ type: "text", text: header.join("\n") + output }],
+				content: [{ type: "text", text: limited.text }],
 				details,
 			};
 		},

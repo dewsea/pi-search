@@ -41,7 +41,7 @@ describe("search promptGuidelines aggregation", () => {
 	it("includes introduction and trailing operational rules", () => {
 		const text = lines().join("\n");
 		assert.ok(text.includes("Use web_search for information beyond your training data"));
-		assert.ok(text.includes("If unsure which provider fits, omit provider"));
+		assert.ok(text.includes("For web_search, omit provider for ordinary searches"));
 		assert.ok(text.includes("Sources:"));
 		assert.ok(text.includes("Use {queries:[...]} with 2-4 varied angles"));
 	});
@@ -65,10 +65,20 @@ describe("fetch promptGuidelines aggregation", () => {
 		}
 	});
 
+	it("prioritizes automatic fallback over provider-specific routing", () => {
+		const searchText = lines().join("\n");
+		const fetchText = flines().join("\n");
+
+		assert.ok(searchText.includes("omit provider by default so the automatic fallback chain remains available"));
+		assert.ok(searchText.includes("set provider only when the user explicitly requests a provider"));
+		assert.ok(fetchText.includes("omit provider by default so the automatic fallback chain remains available"));
+		assert.ok(fetchText.includes("set provider only when the user explicitly requests a provider"));
+	});
+
 	it("includes introduction and trailing operational rules", () => {
 		const text = flines().join("\n");
 		assert.ok(text.includes("Use web_fetch to read the full content of a URL"));
-		assert.ok(text.includes("If unsure which provider fits, omit provider"));
+		assert.ok(text.includes("For web_fetch, omit provider for ordinary extraction"));
 		assert.ok(text.includes("Sources:"));
 		assert.ok(text.includes("use the read tool to access it"));
 	});

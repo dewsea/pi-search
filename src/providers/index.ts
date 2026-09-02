@@ -43,12 +43,15 @@ export function buildFetchChain(): string[] {
 export function searchPromptGuidelines(): string[] {
 	const lines: string[] = [
 		"Use web_search for information beyond your training data — current events, recent docs, live data, academic papers, stock prices, CVEs.",
-		"For web_search, choose a provider based on the query domain.",
+		"For web_search, omit provider by default so the automatic fallback chain remains available.",
+		"For web_search, set provider only when the user explicitly requests a provider or a provider-specific capability is required.",
 	];
 
 	for (const meta of PROVIDERS) {
 		if (meta.searchHint) {
-			lines.push(`For web_search, ${meta.label} (provider='${meta.name}'): ${meta.searchHint}`);
+			lines.push(
+				`For web_search, when selecting a provider explicitly, ${meta.label} (provider='${meta.name}'): ${meta.searchHint}`,
+			);
 		}
 	}
 
@@ -65,7 +68,7 @@ export function searchPromptGuidelines(): string[] {
 	}
 
 	lines.push(
-		"If unsure which provider fits, omit provider in web_search — it uses a cost-priority fallback chain (general-purpose first).",
+		"For web_search, omit provider for ordinary searches even when a provider seems suitable; this keeps the fallback chain enabled.",
 		'After answering with web_search, include a "Sources:" section with markdown hyperlinks: [Title](URL).',
 		"Use web_fetch after web_search to read full page content — web_search returns snippets only.",
 		"Use {queries:[...]} with 2-4 varied angles in web_search for broader coverage — each query routes independently.",
@@ -77,17 +80,20 @@ export function searchPromptGuidelines(): string[] {
 export function fetchPromptGuidelines(): string[] {
 	const lines: string[] = [
 		"Use web_fetch to read the full content of a URL — use it after web_search when a snippet is too short.",
-		"For web_fetch, choose a provider based on the page type.",
+		"For web_fetch, omit provider by default so the automatic fallback chain remains available.",
+		"For web_fetch, set provider only when the user explicitly requests a provider or a provider-specific capability is required.",
 	];
 
 	for (const meta of PROVIDERS) {
 		if (meta.fetchHint) {
-			lines.push(`For web_fetch, ${meta.label} (provider='${meta.name}'): ${meta.fetchHint}`);
+			lines.push(
+				`For web_fetch, when selecting a provider explicitly, ${meta.label} (provider='${meta.name}'): ${meta.fetchHint}`,
+			);
 		}
 	}
 
 	lines.push(
-		"If unsure which provider fits, omit provider in web_fetch — it uses a cost-priority fallback chain (fast/free first, heavy JS-rendering last).",
+		"For web_fetch, omit provider for ordinary extraction even when a provider seems suitable; this keeps the fallback chain enabled.",
 		'After reading content with web_fetch, include a "Sources:" section with markdown hyperlinks to the fetched URLs.',
 		"Large web_fetch results are truncated — the full-output path is reported in the result, so use the read tool to access it.",
 	);

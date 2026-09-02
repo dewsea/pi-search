@@ -1,7 +1,11 @@
 import assert from "node:assert";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, mock } from "node:test";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "@earendil-works/pi-coding-agent";
 import registerSearchKit from "../src/index.js";
+import { registerWebSearchTool, searchCache } from "../src/web-search.js";
 
 async function registeredTools() {
 	const tools = new Map<string, any>();
@@ -12,6 +16,16 @@ async function registeredTools() {
 		registerCommand() {},
 	} as any);
 	return tools;
+}
+
+function registeredSearchTool() {
+	const tools = new Map<string, any>();
+	registerWebSearchTool({
+		registerTool(tool: any) {
+			tools.set(tool.name, tool);
+		},
+	} as any);
+	return tools.get("web_search");
 }
 
 describe("web_search public interface", () => {
@@ -48,6 +62,53 @@ describe("web_search public interface", () => {
 		assert.ok(fetch.description.includes(expectedLimits));
 	});
 
+	it("uses Tavily for both research and supporting sources", async () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "pi-search-research-"));
+		const configDir = join(agentDir, "extensions", "pi-search");
+		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const originalTavilyKey = process.env.TAVILY_API_KEY;
+		const responses = [
+			new Response(JSON.stringify({ results: [] }), { status: 200 }),
+			new Response(JSON.stringify({ answer: "Tavily research report" }), { status: 200 }),
+		];
+		const fetchMock = mock.method(globalThis, "fetch", () => Promise.resolve(responses.shift()!));
+
+		try {
+			mkdirSync(configDir, { recursive: true });
+			writeFileSync(join(configDir, "config.json"), JSON.stringify({ defaults: { max_results: 7 } }));
+			process.env.PI_CODING_AGENT_DIR = agentDir;
+			process.env.TAVILY_API_KEY = "test-tavily-key";
+			searchCache.clear();
+
+			const search = registeredSearchTool();
+			const maxResultsSchema =
+				search.parameters.properties.max_results.anyOf?.[0] ?? search.parameters.properties.max_results;
+			assert.strictEqual(maxResultsSchema.default, 7);
+
+			const result = await search.execute("id", { query: "research source consistency", research: true }, undefined);
+			assert.strictEqual(result.details.provider, "tavily");
+			assert.strictEqual(result.details.research, true);
+			assert.match(result.content[0].text, /Tavily research report/);
+			assert.match(result.content[0].text, /\*0 results via tavily\*/);
+
+			const requestUrls = fetchMock.mock.calls.map((call) => String(call.arguments[0]));
+			assert.deepStrictEqual(requestUrls, ["https://api.tavily.com/search", "https://api.tavily.com/research"]);
+			const [, searchRequest] = fetchMock.mock.calls[0].arguments as [string, RequestInit];
+			assert.deepStrictEqual(JSON.parse(String(searchRequest.body)), {
+				query: "research source consistency",
+				max_results: 7,
+			});
+		} finally {
+			fetchMock.mock.restore();
+			searchCache.clear();
+			if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+			if (originalTavilyKey === undefined) delete process.env.TAVILY_API_KEY;
+			else process.env.TAVILY_API_KEY = originalTavilyKey;
+			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects ambiguous research and raw-provider combinations before network access", async () => {
 		const tools = await registeredTools();
 		const search = tools.get("web_search");
@@ -59,6 +120,10 @@ describe("web_search public interface", () => {
 		await assert.rejects(
 			search.execute("id", { queries: ["a", "b"], research: true }, undefined),
 			/requires exactly one query/,
+		);
+		await assert.rejects(
+			search.execute("id", { query: "q", research: true, vertical: "academic.search" }, undefined),
+			/research=true.*vertical search/,
 		);
 		await assert.rejects(
 			fetch.execute("id", { url: "https://example.com", raw: true, provider: "jina" }, undefined),

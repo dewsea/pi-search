@@ -8,8 +8,8 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type ExtensionAPI, formatSize } f
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { StringEnum } from "./adapter-api.js";
-import { loadConfig, resolveApiKey } from "./config.js";
-import { limitSearchOutput } from "./output.js";
+import { loadConfig, resolveApiKey, type SearchConfig } from "./config.js";
+import { limitToolOutput } from "./output.js";
 import {
 	allVerticals,
 	buildSearchChain,
@@ -31,6 +31,13 @@ export const searchCache = new SafeMemoryCache<SearchCacheEntry>(300000, 100);
 const MIN_RESULTS = 1;
 const MAX_RESULTS = 20;
 const DEFAULT_RESULTS = 5;
+const RESEARCH_PROVIDER = "tavily";
+
+export function resolveMaxResults(requestedMaxResults: number | undefined, config: SearchConfig): number {
+	const candidate = requestedMaxResults ?? config.defaults?.max_results ?? DEFAULT_RESULTS;
+	if (typeof candidate !== "number" || !Number.isFinite(candidate)) return DEFAULT_RESULTS;
+	return Math.min(Math.max(Math.trunc(candidate), MIN_RESULTS), MAX_RESULTS);
+}
 
 function formatSearchResults(results: SearchResult[], provider: string): string {
 	let out = `*${results.length} results via ${provider}*\n\n`;
@@ -98,10 +105,10 @@ export function assertResearchAvailable(
 	apiKeys: Record<string, string | undefined>,
 	providers: Map<string, Provider>,
 ): void {
-	if (!apiKeys.tavily) {
+	if (!apiKeys[RESEARCH_PROVIDER]) {
 		throw new Error("'research=true' requires a Tavily API key (TAVILY_API_KEY or config.json).");
 	}
-	if (!providers.get("tavily")?.research) {
+	if (!providers.get(RESEARCH_PROVIDER)?.research) {
 		throw new Error("'research=true' requires an available Tavily provider.");
 	}
 }
@@ -192,9 +199,12 @@ export async function executeSearch(
 	}
 
 	if (lastEmptyProvider) {
-		const finalResult = { results: [] as SearchResult[], provider: lastEmptyProvider };
-		searchCache.set(cacheKey, finalResult);
-		return finalResult;
+		if (errors.length === 0) {
+			const finalResult = { results: [] as SearchResult[], provider: lastEmptyProvider };
+			searchCache.set(cacheKey, finalResult);
+			return finalResult;
+		}
+		throw new Error(`Search was inconclusive for "${query}":\n${errors.join("\n")}`);
 	}
 
 	throw new Error(`All providers failed for "${query}":\n${errors.join("\n")}`);
@@ -202,6 +212,7 @@ export async function executeSearch(
 
 export function registerWebSearchTool(pi: ExtensionAPI): void {
 	const providerNames = searchProviderNames();
+	const configuredDefaultMaxResults = resolveMaxResults(undefined, loadConfig());
 	const parameters = Type.Object({
 		query: Type.Optional(
 			Type.String({ description: "Single search query. Use 'queries' for multi-angle research." }),
@@ -225,16 +236,16 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 		),
 		max_results: Type.Optional(
 			Type.Integer({
-				description: `Results per query (${MIN_RESULTS}-${MAX_RESULTS}, default ${DEFAULT_RESULTS}).`,
+				description: `Results per query (${MIN_RESULTS}-${MAX_RESULTS}, default ${configuredDefaultMaxResults}).`,
 				minimum: MIN_RESULTS,
 				maximum: MAX_RESULTS,
-				default: DEFAULT_RESULTS,
+				default: configuredDefaultMaxResults,
 			}),
 		),
 		research: Type.Optional(
 			Type.Boolean({
 				description:
-					"Generate a Tavily research report for exactly one query. Requires Tavily; cannot be combined with another explicit provider.",
+					"Generate a Tavily research report with Tavily search sources for exactly one query. Requires Tavily; cannot be combined with another explicit provider or vertical search.",
 				default: false,
 			}),
 		),
@@ -269,8 +280,9 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 
 		async execute(_toolCallId, params, signal, onUpdate) {
 			signal?.throwIfAborted();
-			const maxResults = Math.min(Math.max(params.max_results ?? DEFAULT_RESULTS, MIN_RESULTS), MAX_RESULTS);
-			const doResearch = (params.research ?? false) as boolean;
+			const config = loadConfig();
+			const maxResults = resolveMaxResults(params.max_results, config);
+			const doResearch = params.research ?? false;
 			const requestedProvider = params.provider as string | undefined;
 			const requestedVertical = params.vertical as string | undefined;
 
@@ -288,9 +300,13 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 			if (doResearch && queryList.length !== 1) {
 				throw new Error("'research=true' requires exactly one query.");
 			}
-			if (doResearch && requestedProvider && requestedProvider !== "tavily") {
+			if (doResearch && requestedProvider && requestedProvider !== RESEARCH_PROVIDER) {
 				throw new Error("'research=true' uses Tavily and cannot be combined with another explicit provider.");
 			}
+			if (doResearch && requestedVertical) {
+				throw new Error("'research=true' uses Tavily and cannot be combined with vertical search.");
+			}
+			const searchProvider = doResearch ? RESEARCH_PROVIDER : requestedProvider;
 
 			// For single queries with research enabled, check the dedicated research cache
 			let researchCacheKey: string | undefined;
@@ -298,7 +314,8 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 				researchCacheKey = JSON.stringify({
 					query: queryList[0],
 					maxResults,
-					provider: requestedProvider,
+					provider: searchProvider,
+					vertical: requestedVertical,
 					research: true,
 				});
 				const cached = searchCache.get(researchCacheKey);
@@ -312,7 +329,6 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 			}
 
 			// Build providers from config
-			const config = loadConfig();
 			const apiKeys: Record<string, string | undefined> = {};
 			for (const meta of PROVIDERS) {
 				apiKeys[meta.name] = resolveApiKey(meta.name, meta.envVar, config);
@@ -344,7 +360,7 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 								q,
 								maxResults,
 								{
-									provider: requestedProvider,
+									provider: searchProvider,
 									vertical: requestedVertical,
 								},
 								signal,
@@ -395,7 +411,7 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 						query,
 						maxResults,
 						{
-							provider: requestedProvider,
+							provider: searchProvider,
 							vertical: requestedVertical,
 						},
 						signal,
@@ -407,9 +423,9 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 						resultCount: results.length,
 					};
 
-					// Deep research (Tavily only)
+					// Deep research and its supporting search results both use Tavily.
 					if (doResearch) {
-						const tavily = providers.get("tavily")!;
+						const tavily = providers.get(RESEARCH_PROVIDER)!;
 						onUpdate?.({
 							content: [{ type: "text", text: "Generating research report..." }],
 							details: { phase: "research" },
@@ -418,7 +434,7 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 						signal?.throwIfAborted();
 						details.research = true;
 
-						const limited = await limitSearchOutput(
+						const limited = await limitToolOutput(
 							formatResearchResults(query, answer, results, provider),
 							signal,
 						);
@@ -444,7 +460,7 @@ export function registerWebSearchTool(pi: ExtensionAPI): void {
 			}
 
 			const text = responsePayload.content[0]?.text ?? "";
-			const limited = await limitSearchOutput(text, signal);
+			const limited = await limitToolOutput(text, signal);
 			return {
 				...responsePayload,
 				content: [{ type: "text", text: limited.text }],
