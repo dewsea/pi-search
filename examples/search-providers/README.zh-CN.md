@@ -10,11 +10,8 @@
 |---|---|---|---|
 | DeepSeek | 搜索 | `DEEPSEEK_API_KEY` | `DEEPSEEK_SEARCH_MODEL` |
 | 豆包搜索 | 搜索 | `DOUBAO_SEARCH_API_KEY` | — |
-| Exa | 搜索、内容提取 | `EXA_API_KEY` | — |
-| Firecrawl | 内容提取 | `FIRECRAWL_API_KEY` | — |
 | Gemini | 搜索 | `GEMINI_API_KEY` | `GEMINI_SEARCH_MODEL` |
 | iFlow | 搜索、内容提取 | `IFLOW_API_KEY` | — |
-| Serper | 搜索 | `SERPER_API_KEY` | — |
 
 ## 安装为用户适配器
 
@@ -26,11 +23,8 @@
   providers/
     deepseek.ts
     doubao.ts
-    exa.ts
-    firecrawl.ts
     gemini.ts
     iflow.ts
-    serper.ts
 ```
 
 例如：
@@ -38,8 +32,8 @@
 ```sh
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 mkdir -p "$agent_dir/extensions/pi-search/providers"
-cp examples/search-providers/providers/exa.ts \
-  "$agent_dir/extensions/pi-search/providers/exa.ts"
+cp examples/search-providers/providers/deepseek.ts \
+  "$agent_dir/extensions/pi-search/providers/deepseek.ts"
 ```
 
 如果未设置 `PI_CODING_AGENT_DIR`，Pi 通常将代理目录解析为 `~/.pi/agent`。
@@ -49,15 +43,15 @@ cp examples/search-providers/providers/exa.ts \
 ```json
 {
   "apiKeys": {
-    "doubao": "...",
-    "exa": "..."
+    "deepseek": "...",
+    "doubao": "..."
   }
 }
 ```
 
-环境变量优先。凭据文件应仅允许当前用户读取，且绝不能提交密钥。修改由进程继承的环境变量后需重启 Pi；也可更新 `config.json`，随后执行 `/reload`，重新发现适配器文件及工具 schema。
+凭据解析优先级遵循统一的 `stored > env > keyless`，`config.json` 中的存储配置优先于环境变量。凭据文件应仅允许当前用户读取，且绝不能提交密钥。修改由进程继承的环境变量后需重启 Pi；也可更新 `config.json`，随后执行 `/reload`，重新发现适配器文件及工具 schema。
 
-在 `web_search` 或 `web_fetch` 中使用的 Provider 名称分别为 `deepseek`、`doubao`、`exa`、`firecrawl`、`gemini`、`iflow` 和 `serper`。
+在 `search` 或 `fetch` 中使用的 Provider 名称分别为 `deepseek`、`doubao`、`gemini` 和 `iflow`。
 
 ## 范围与安全
 

@@ -3,83 +3,74 @@ import { describe, it } from "node:test";
 import { fetchPromptGuidelines, PROVIDERS, searchPromptGuidelines } from "../src/providers/index.js";
 
 function lines(): string[] {
-	return searchPromptGuidelines();
+	return searchPromptGuidelines(PROVIDERS);
 }
 
 function flines(): string[] {
-	return fetchPromptGuidelines();
+	return fetchPromptGuidelines(PROVIDERS);
 }
 
 describe("search promptGuidelines aggregation", () => {
-	it("includes guidelines for all searchHint providers", () => {
-		const text = lines().join("\n");
-		for (const provider of PROVIDERS.filter((meta) => meta.searchHint)) {
+	it("includes guidelines for all searchHint providers in candidates", () => {
+		const searchCandidates = PROVIDERS.filter((p) => p.searchHint);
+		const text = searchPromptGuidelines(searchCandidates).join("\n");
+		for (const provider of searchCandidates) {
 			assert.ok(
-				text.includes(provider.label) && text.includes(`provider='${provider.name}'`),
+				text.includes(provider.label) && text.includes(`providers: ["${provider.name}"]`),
 				`missing ${provider.label}`,
 			);
 		}
 	});
 
-	it("explicitly names web_search in every guideline entry", () => {
+	it("explicitly names search in every guideline entry", () => {
 		for (const guideline of lines()) {
 			assert.ok(guideline.trim(), "promptGuidelines should not contain empty rules");
-			assert.ok(guideline.includes("web_search"), `rule does not name web_search: ${guideline}`);
+			assert.ok(guideline.includes("search"), `rule does not name search: ${guideline}`);
 		}
 	});
 
 	it("excludes pure fetch-only providers from search guidelines", () => {
-		const text = lines().join("\n");
-		for (const provider of PROVIDERS.filter((meta) => !meta.capabilities.generalSearch)) {
+		const searchCandidates = PROVIDERS.filter((p) => typeof p.search === "function");
+		const text = searchPromptGuidelines(searchCandidates).join("\n");
+		for (const provider of PROVIDERS.filter((p) => typeof p.search !== "function")) {
 			assert.ok(
-				!text.includes(`provider='${provider.name}'`),
+				!text.includes(`providers: ["${provider.name}"]`),
 				`${provider.label} should not appear in search hints`,
 			);
 		}
 	});
 
-	it("includes introduction and trailing operational rules", () => {
+	it("does not mention deprecated fallback priority, queries, or raw", () => {
 		const text = lines().join("\n");
-		assert.ok(text.includes("Use web_search for information beyond your training data"));
-		assert.ok(text.includes("For web_search, omit provider for ordinary searches"));
-		assert.ok(text.includes("Sources:"));
-		assert.ok(text.includes("Use {queries:[...]} with 2-4 varied angles"));
+		assert.ok(!text.includes("fallback chain"), "must not mention fallback chain");
+		assert.ok(!text.includes("omit provider"), "must not mention omit provider");
+		assert.ok(!text.includes("queries"), "must not mention queries");
+		assert.ok(!text.includes("research="), "must not mention research");
 	});
 });
 
 describe("fetch promptGuidelines aggregation", () => {
-	it("includes guidelines for all fetchHint providers", () => {
-		const text = flines().join("\n");
-		for (const provider of PROVIDERS.filter((meta) => meta.fetchHint)) {
+	it("includes guidelines for all fetchHint providers in candidates", () => {
+		const fetchCandidates = PROVIDERS.filter((p) => p.fetchHint);
+		const text = fetchPromptGuidelines(fetchCandidates).join("\n");
+		for (const provider of fetchCandidates) {
 			assert.ok(
-				text.includes(provider.label) && text.includes(`provider='${provider.name}'`),
+				text.includes(provider.label) && text.includes(`providers: ["${provider.name}"]`),
 				`missing ${provider.label}`,
 			);
 		}
 	});
 
-	it("explicitly names web_fetch in every guideline entry", () => {
+	it("explicitly names fetch in every guideline entry", () => {
 		for (const guideline of flines()) {
 			assert.ok(guideline.trim(), "promptGuidelines should not contain empty rules");
-			assert.ok(guideline.includes("web_fetch"), `rule does not name web_fetch: ${guideline}`);
+			assert.ok(guideline.includes("fetch"), `rule does not name fetch: ${guideline}`);
 		}
 	});
 
-	it("prioritizes automatic fallback over provider-specific routing", () => {
-		const searchText = lines().join("\n");
-		const fetchText = flines().join("\n");
-
-		assert.ok(searchText.includes("omit provider by default so the automatic fallback chain remains available"));
-		assert.ok(searchText.includes("set provider only when the user explicitly requests a provider"));
-		assert.ok(fetchText.includes("omit provider by default so the automatic fallback chain remains available"));
-		assert.ok(fetchText.includes("set provider only when the user explicitly requests a provider"));
-	});
-
-	it("includes introduction and trailing operational rules", () => {
+	it("does not mention deprecated fallback priority or omit provider", () => {
 		const text = flines().join("\n");
-		assert.ok(text.includes("Use web_fetch to read the full content of a URL"));
-		assert.ok(text.includes("For web_fetch, omit provider for ordinary extraction"));
-		assert.ok(text.includes("Sources:"));
-		assert.ok(text.includes("use the read tool to access it"));
+		assert.ok(!text.includes("fallback chain"), "must not mention fallback chain");
+		assert.ok(!text.includes("omit provider"), "must not mention omit provider");
 	});
 });

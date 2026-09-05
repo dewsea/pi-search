@@ -2,32 +2,12 @@ import assert from "node:assert";
 import { describe, it } from "node:test";
 import deepseekAdapter from "../examples/search-providers/providers/deepseek.js";
 import doubaoAdapter from "../examples/search-providers/providers/doubao.js";
-import exaAdapter from "../examples/search-providers/providers/exa.js";
-import firecrawlAdapter from "../examples/search-providers/providers/firecrawl.js";
 import geminiAdapter from "../examples/search-providers/providers/gemini.js";
 import iflowAdapter from "../examples/search-providers/providers/iflow.js";
-import serperAdapter from "../examples/search-providers/providers/serper.js";
-import type { Provider, ProviderAdapter } from "../src/adapter-api.js";
-import { validateProviderAdapter } from "../src/adapter-api.js";
+import { type Provider, validateProviderAdapter } from "../src/adapter-api.js";
+import { createProviderContext } from "../src/execution.js";
 
-const REFERENCE_ADAPTERS: ProviderAdapter[] = [
-	deepseekAdapter,
-	doubaoAdapter,
-	exaAdapter,
-	firecrawlAdapter,
-	geminiAdapter,
-	iflowAdapter,
-	serperAdapter,
-];
-
-function createReferenceProviders(): Map<string, Provider> {
-	return new Map(
-		REFERENCE_ADAPTERS.map((adapter) => {
-			const provider = adapter.create({ apiKey: "test-key" });
-			return [adapter.name, provider];
-		}),
-	);
-}
+const REFERENCE_ADAPTERS: Provider[] = [deepseekAdapter, doubaoAdapter, geminiAdapter, iflowAdapter];
 
 function textResponse(body: unknown, init: ResponseInit = {}): Response {
 	return new Response(typeof body === "string" ? body : JSON.stringify(body), {
@@ -38,30 +18,14 @@ function textResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe("reference provider adapters", () => {
-	it("default-export valid, key-required adapters with matching runtime capabilities", () => {
+	it("default-export valid Provider objects adhering to the unified contract", () => {
 		assert.deepStrictEqual(
 			REFERENCE_ADAPTERS.map(({ name }) => name),
-			["deepseek", "doubao", "exa", "firecrawl", "gemini", "iflow", "serper"],
+			["deepseek", "doubao", "gemini", "iflow"],
 		);
 
 		for (const adapter of REFERENCE_ADAPTERS) {
 			assert.doesNotThrow(() => validateProviderAdapter(adapter), adapter.name);
-			assert.strictEqual(adapter.apiKeyRequired, true, `${adapter.name} must require an API key`);
-
-			const provider = adapter.create({ apiKey: "test-key" });
-			assert.strictEqual(provider.name, adapter.name);
-			assert.strictEqual(provider.label, adapter.label);
-			assert.deepStrictEqual(provider.capabilities, adapter.capabilities);
-			assert.strictEqual(
-				typeof provider.search === "function",
-				adapter.capabilities.generalSearch,
-				`${adapter.name} search implementation mismatch`,
-			);
-			assert.strictEqual(
-				typeof provider.fetch === "function",
-				adapter.capabilities.contentExtraction,
-				`${adapter.name} fetch implementation mismatch`,
-			);
 		}
 	});
 
@@ -99,18 +63,6 @@ describe("reference provider adapters", () => {
 					},
 				});
 			}
-			if (url === "https://api.exa.ai/search") {
-				return textResponse({
-					results: [
-						{
-							title: "Exa result",
-							url: "https://example.com/exa",
-							text: "Exa summary",
-							publishedDate: "2026-08-22",
-						},
-					],
-				});
-			}
 			if (url.startsWith("https://generativelanguage.googleapis.com/")) {
 				return textResponse({
 					candidates: [
@@ -137,36 +89,28 @@ describe("reference provider adapters", () => {
 					},
 				});
 			}
-			if (url === "https://google.serper.dev/search") {
-				return textResponse({
-					organic: [
-						{
-							title: "Serper result",
-							link: "https://example.com/serper",
-							snippet: "Serper summary",
-							date: "2026-08-20",
-						},
-					],
-				});
-			}
 			throw new Error(`Unexpected mocked search URL: ${url}`);
 		};
 
 		try {
-			const providers = createReferenceProviders();
+			const providers = new Map(REFERENCE_ADAPTERS.map((a) => [a.name, a]));
 			const expected = [
 				["deepseek", "DeepSeek result", "https://example.com/deepseek"],
 				["doubao", "Doubao result", "https://example.com/doubao"],
-				["exa", "Exa result", "https://example.com/exa"],
 				["gemini", "Gemini result", "https://example.com/gemini"],
 				["iflow", "iFlow result", "https://example.com/iflow"],
-				["serper", "Serper result", "https://example.com/serper"],
 			] as const;
 
 			for (const [name, title, url] of expected) {
-				const response = await providers.get(name)?.search?.("test query", 5);
-				assert.strictEqual(response?.results[0]?.title, title, name);
-				assert.strictEqual(response?.results[0]?.url, url, name);
+				const provider = providers.get(name)!;
+				const { ctx, cleanup } = createProviderContext(provider, "test-key");
+				try {
+					const response = await provider.search?.("test query", 5, ctx);
+					assert.strictEqual(response?.results[0]?.title, title, name);
+					assert.strictEqual(response?.results[0]?.url, url, name);
+				} finally {
+					cleanup();
+				}
 			}
 
 			const doubaoCall = calls.find(({ url }) => url === "https://open.feedcoopapi.com/search_api/web_search");
@@ -188,14 +132,6 @@ describe("reference provider adapters", () => {
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = async (input) => {
 			const url = String(input);
-			if (url === "https://api.exa.ai/contents") {
-				return textResponse({
-					results: [{ title: "Exa page", url: "https://example.com/page", text: "Exa content" }],
-				});
-			}
-			if (url === "https://api.firecrawl.dev/v1/scrape") {
-				return textResponse({ success: true, data: { title: "Firecrawl page", markdown: "# Firecrawl" } });
-			}
 			if (url === "https://platform.iflow.cn/api/search/webFetch") {
 				return textResponse({ success: true, data: { title: "iFlow page", content: "# iFlow" } });
 			}
@@ -203,22 +139,18 @@ describe("reference provider adapters", () => {
 		};
 
 		try {
-			const providers = createReferenceProviders();
-			const exa = await providers.get("exa")?.fetch?.("https://example.com/page");
-			const firecrawl = await providers.get("firecrawl")?.fetch?.("https://example.com/page");
-			const iflow = await providers.get("iflow")?.fetch?.("https://example.com/page");
-
-			assert.deepStrictEqual(exa, { text: "Exa content", title: "Exa page", contentType: "text/plain" });
-			assert.deepStrictEqual(firecrawl, {
-				text: "# Firecrawl",
-				title: "Firecrawl page",
-				contentType: "text/markdown",
-			});
-			assert.deepStrictEqual(iflow, {
-				text: "# iFlow",
-				title: "iFlow page",
-				contentType: "text/markdown",
-			});
+			const provider = iflowAdapter;
+			const { ctx, cleanup } = createProviderContext(provider, "test-key");
+			try {
+				const iflow = await provider.fetch?.("https://example.com/page", ctx);
+				assert.deepStrictEqual(iflow, {
+					text: "# iFlow",
+					title: "iFlow page",
+					contentType: "text/markdown",
+				});
+			} finally {
+				cleanup();
+			}
 		} finally {
 			globalThis.fetch = originalFetch;
 		}

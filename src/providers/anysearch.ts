@@ -1,18 +1,5 @@
 import { defineProvider } from "../adapter-api.js";
-import { fetchWithTimeout } from "../utils.js";
-import type { FetchResponse, Provider, SearchResponse, SearchResult } from "./types.js";
-
-// Anysearch REST API client
-//
-// Endpoints:
-//   POST https://api.anysearch.com/v1/search  — general + vertical search
-//   POST https://api.anysearch.com/v1/extract — content extraction
-//
-// Vertical domains: finance, academic, security, travel, legal, health,
-//   geo, code, ecommerce, gaming, film, music, business, ip, environment,
-//   energy, home, education, religion, fashion, tech
-//
-// Docs: https://www.anysearch.com/docs
+import type { FetchResponse, Provider, ProviderContext, SearchResponse, SearchResult } from "./types.js";
 
 const BASE = "https://api.anysearch.com";
 
@@ -25,20 +12,24 @@ interface AnysearchRawResult {
 	score?: number;
 	quality_score?: number;
 	published_at?: string;
-	source?: string;
 }
 
-// Actual API wraps response in { code, message, data: { results, metadata } }
-interface AnysearchEnvelope {
+interface AnysearchSearchEnvelope {
 	code: number;
 	message: string;
-	data: {
+	data?: {
 		results?: AnysearchRawResult[];
-		metadata?: {
-			total_results?: number;
-			search_time_ms?: number;
-			request_id?: string;
-		};
+	};
+}
+
+interface AnysearchExtractEnvelope {
+	code: number;
+	message: string;
+	request_id?: string;
+	data?: {
+		url?: string;
+		title?: string;
+		content?: string;
 	};
 }
 
@@ -58,137 +49,57 @@ function normalizeResults(raw: AnysearchRawResult[]): SearchResult[] {
 	}));
 }
 
-async function doSearch(
-	apiKey: string | undefined,
-	body: Record<string, unknown>,
-	signal?: AbortSignal,
-): Promise<AnysearchEnvelope["data"]> {
-	const res = await fetchWithTimeout(`${BASE}/v1/search`, {
-		method: "POST",
-		headers: authHeaders(apiKey),
-		body: JSON.stringify(body),
-		signal,
-	});
-	if (!res.ok) {
-		const text = await res.text().catch(() => "");
-		throw new Error(`AnySearch search error (${res.status}): ${text}`);
-	}
-	const envelope = (await res.json()) as AnysearchEnvelope;
-	if (envelope.code !== 0) {
-		throw new Error(`AnySearch API error: ${envelope.message}`);
-	}
-	return envelope.data;
-}
+export const anysearchProvider: Provider = {
+	name: "anysearch",
+	label: "AnySearch",
+	envVar: "ANYSEARCH_API_KEY",
+	keyless: true,
+	searchHint: "General search engine indexing public web pages with quick factual lookups.",
+	fetchHint: "Extracts main page article text and basic metadata.",
 
-export class AnysearchProvider implements Provider {
-	readonly name = "anysearch";
-	readonly label = "AnySearch";
-	readonly capabilities = {
-		generalSearch: true,
-		verticalSearch: true,
-		contentExtraction: true,
-		crawl: false,
-		siteMap: false,
-		deepResearch: false,
-		batchSearch: true,
-		hasMetadata: true,
-	};
-
-	constructor(private readonly apiKey: string | undefined) {}
-
-	async search(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
-		const data = await doSearch(this.apiKey, { query, max_results: maxResults }, signal);
-		return { results: normalizeResults(data.results ?? []) };
-	}
-
-	async verticalSearch(
-		domain: string,
-		subDomain: string,
-		query: string,
-		maxResults: number,
-		signal?: AbortSignal,
-	): Promise<SearchResponse> {
-		const data = await doSearch(
-			this.apiKey,
-			{
-				query,
-				max_results: maxResults,
-				domains: [domain],
-				tags: [subDomain],
-			},
-			signal,
-		);
-		return { results: normalizeResults(data.results ?? []) };
-	}
-
-	async batchSearch(queries: string[], maxResults: number, signal?: AbortSignal): Promise<SearchResponse[]> {
-		signal?.throwIfAborted();
-		// Anysearch v1 doesn't have a native batch endpoint — run in parallel
-		const results = await Promise.all(
-			queries.map(async (q) => {
-				try {
-					return await this.search(q, maxResults, signal);
-				} catch (_err) {
-					signal?.throwIfAborted();
-					return { results: [] as SearchResult[] };
-				}
-			}),
-		);
-		signal?.throwIfAborted();
-		return results;
-	}
-
-	async fetch(url: string, signal?: AbortSignal): Promise<FetchResponse> {
-		const res = await fetchWithTimeout(`${BASE}/v1/extract`, {
+	async search(query: string, maxResults: number, ctx: ProviderContext): Promise<SearchResponse> {
+		const res = await ctx.request(`${BASE}/v1/search`, {
 			method: "POST",
-			headers: authHeaders(this.apiKey),
+			headers: authHeaders(ctx.apiKey),
+			body: JSON.stringify({ query, max_results: maxResults }),
+		});
+		if (!res.ok) {
+			throw new Error(`AnySearch search error (${res.status}): ${await res.text().catch(() => "")}`);
+		}
+		const envelope = (await res.json()) as AnysearchSearchEnvelope;
+		if (envelope.code !== 0) {
+			throw new Error(`AnySearch API error: ${envelope.message}`);
+		}
+		return { results: normalizeResults(envelope.data?.results ?? []) };
+	},
+
+	async fetch(url: string, ctx: ProviderContext): Promise<FetchResponse> {
+		const res = await ctx.request(`${BASE}/v1/extract`, {
+			method: "POST",
+			headers: authHeaders(ctx.apiKey),
 			body: JSON.stringify({ url }),
-			signal,
 		});
 		if (!res.ok) {
 			throw new Error(`AnySearch extract error (${res.status}): ${await res.text().catch(() => "")}`);
 		}
-		const envelope = (await res.json()) as {
-			code: number;
-			message: string;
-			data?: { results?: AnysearchRawResult[] };
-		};
+		const envelope = (await res.json()) as AnysearchExtractEnvelope;
 		if (envelope.code !== 0) {
 			throw new Error(`AnySearch API error: ${envelope.message}`);
 		}
-		const r = envelope.data?.results?.[0];
-		if (!r?.content && !r?.raw_content) {
+		const content = envelope.data?.content;
+		if (typeof content !== "string" || content.trim().length === 0) {
 			throw new Error(`AnySearch extract: no content for ${url}`);
 		}
+		const title =
+			typeof envelope.data?.title === "string" && envelope.data.title.trim().length > 0
+				? envelope.data.title.trim()
+				: undefined;
 		return {
-			text: (r.raw_content ?? r.content)!,
-			title: r.title,
+			text: content,
+			title,
 			contentType: "text/markdown",
 		};
-	}
-}
-
-export default defineProvider({
-	name: "anysearch",
-	label: "AnySearch",
-	envVar: "ANYSEARCH_API_KEY",
-	capabilities: {
-		generalSearch: true,
-		verticalSearch: true,
-		contentExtraction: true,
-		crawl: false,
-		siteMap: false,
-		deepResearch: false,
-		batchSearch: true,
-		hasMetadata: true,
 	},
-	searchHint:
-		"Provides structured vertical search (like US stocks, academic archives, security vulnerabilities, or travel metadata) tailored for niche domains when a specific 'vertical' is specified.",
-	fetchHint:
-		"Extracts structured metadata (e.g. pub dates, authors, specifications) along with the core content from domain-specific vertical pages.",
-	verticals: ["finance.us_stock", "academic.search", "security.scan", "travel"],
-	searchFallbackPriority: 30,
-	fetchFallbackPriority: 25,
-	apiKeyRequired: false,
-	create: ({ apiKey }) => new AnysearchProvider(apiKey),
-});
+};
+
+export default defineProvider(anysearchProvider);

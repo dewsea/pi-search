@@ -29,6 +29,12 @@ const requiredFiles = [
 	"src/providers/tavily.ts",
 	"src/providers/anysearch.ts",
 	"src/providers/jina.ts",
+	"src/providers/exa.ts",
+	"src/providers/serper.ts",
+	"src/providers/firecrawl.ts",
+	"src/providers/brave.ts",
+	"src/providers/tinyfish.ts",
+	"src/providers/serpapi.ts",
 	"README.md",
 	"README.zh-CN.md",
 	"CHANGELOG.md",
@@ -183,34 +189,9 @@ export default defineProvider({
 	name: ${JSON.stringify(customProviderName)},
 	label: "Artifact Custom",
 	envVar: "ARTIFACT_CUSTOM_API_KEY",
-	capabilities: {
-		generalSearch: true,
-		verticalSearch: false,
-		contentExtraction: false,
-		crawl: false,
-		siteMap: false,
-		deepResearch: false,
-		batchSearch: false,
-		hasMetadata: false,
-	},
+	keyless: true,
 	searchHint: "Production artifact adapter check",
-	searchFallbackPriority: 99,
-	apiKeyRequired: false,
-	create: () => ({
-		name: ${JSON.stringify(customProviderName)},
-		label: "Artifact Custom",
-		capabilities: {
-			generalSearch: true,
-			verticalSearch: false,
-			contentExtraction: false,
-			crawl: false,
-			siteMap: false,
-			deepResearch: false,
-			batchSearch: false,
-			hasMetadata: false,
-		},
-		async search() { return { results: [] }; },
-	}),
+	async search() { return { results: [] }; },
 });
 `,
 		"utf8",
@@ -244,7 +225,11 @@ export default defineProvider({
 		throw new Error(`expected one published Pi entry point, loaded ${result.extensions.length}`);
 
 	const extension = result.extensions[0];
-	const expectedToolNames = ["web_fetch", "web_search"];
+	if (!extension.commands?.has("search")) {
+		throw new Error("published Pi entry point must register /search command");
+	}
+
+	const expectedToolNames = ["fetch", "search"];
 	const loadedToolNames = [...extension.tools.keys()].sort();
 	if (JSON.stringify(loadedToolNames) !== JSON.stringify(expectedToolNames)) {
 		throw new Error(`published Pi entry point registered unexpected tools: ${loadedToolNames.join(", ")}`);
@@ -262,21 +247,34 @@ export default defineProvider({
 			throw new Error(`${name} has a promptGuidelines entry that does not name the tool`);
 		}
 	}
-	const searchDefinition = extension.tools.get("web_search")?.definition;
-	const searchProviderSchema = searchDefinition?.parameters.properties.provider;
-	const searchProviderNames = searchProviderSchema?.anyOf?.[0]?.enum ?? searchProviderSchema?.enum;
+	const searchDefinition = extension.tools.get("search")?.definition;
+	const providersSchema = searchDefinition?.parameters.properties.providers;
+	if (providersSchema?.type !== "array") {
+		throw new Error("search providers must be an array schema");
+	}
+	const providersItemSchema = providersSchema.items;
+	const searchProviderNames = providersItemSchema?.anyOf?.[0]?.enum ?? providersItemSchema?.enum;
 	if (!searchProviderNames?.includes(customProviderName)) {
-		throw new Error(`published custom adapter was not registered: ${customProviderName}`);
+		throw new Error(`published custom adapter was not registered in providers enum: ${customProviderName}`);
 	}
 	if (searchDefinition?.parameters.properties.max_results.type !== "integer") {
-		throw new Error("web_search max_results must use an integer schema");
+		throw new Error("search max_results must use an integer schema");
 	}
-	const preparedLegacyArguments = searchDefinition.prepareArguments?.({ query: "compatibility", max_results: 3.8 });
+	const preparedLegacyArguments = searchDefinition.prepareArguments?.({
+		query: "compatibility",
+		provider: "artifact-custom",
+		max_results: 3.8,
+	});
 	if (preparedLegacyArguments?.max_results !== 3) {
-		throw new Error("web_search must normalize legacy fractional max_results values");
+		throw new Error("search must normalize legacy fractional max_results values");
+	}
+	if (JSON.stringify(preparedLegacyArguments?.providers) !== JSON.stringify(["artifact-custom"])) {
+		throw new Error("search must normalize legacy provider argument to providers array");
 	}
 
-	console.log(`artifact ok: ${metadata.filename} (${artifactFiles.length} files, 1 Pi entry point, 2 tools)`);
+	console.log(
+		`artifact ok: ${metadata.filename} (${artifactFiles.length} files, 1 Pi entry point, 2 tools, 1 command)`,
+	);
 }
 
 try {

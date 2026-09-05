@@ -2,23 +2,10 @@ import {
 	defineProvider,
 	type FetchResponse,
 	type Provider,
-	type ProviderMeta,
+	type ProviderContext,
 	type SearchResponse,
 	type SearchResult,
 } from "@hyav/pi-search";
-
-function withTimeout(signal: AbortSignal | undefined, timeoutMs = 30_000): AbortSignal {
-	const timeoutSignal = AbortSignal.timeout(timeoutMs);
-	return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-}
-
-// iFlow REST API client
-//
-// Endpoints:
-//   POST https://platform.iflow.cn/api/search/webSearch  — web search
-//   POST https://platform.iflow.cn/api/search/webFetch   — content extraction
-//
-// Documentation: https://platform.iflow.cn
 
 const BASE = "https://platform.iflow.cn";
 
@@ -66,41 +53,20 @@ function normalizeResults(raw: IflowRawResult[]): SearchResult[] {
 	}));
 }
 
-export const IFLOW_META = {
+export const iflowProvider: Provider = {
 	name: "iflow",
 	label: "iFlow",
 	envVar: "IFLOW_API_KEY",
-	capabilities: {
-		generalSearch: true,
-		verticalSearch: false,
-		contentExtraction: true,
-		crawl: false,
-		siteMap: false,
-		deepResearch: false,
-		batchSearch: false,
-		hasMetadata: false,
-	},
-	searchHint:
-		"Specialized in Chinese local queries, domestic news, and localized content indexing. Snippets are highly condensed and filtered for Chinese LLM input.",
-	fetchHint:
-		"Specially optimized for Chinese websites. Intelligently strips commercial promotions, domestic ads, and irrelevant structural boilerplate typical of Chinese portals.",
-	searchFallbackPriority: 28,
-	fetchFallbackPriority: 35,
-} as const satisfies ProviderMeta;
+	searchHint: "Specialized in Chinese local queries, domestic news, and localized content indexing.",
+	fetchHint: "Specially optimized for Chinese websites. Intelligently strips commercial promotions and domestic ads.",
 
-export class IflowProvider implements Provider {
-	readonly name = IFLOW_META.name;
-	readonly label = IFLOW_META.label;
-	readonly capabilities = IFLOW_META.capabilities;
+	async search(query: string, maxResults: number, ctx: ProviderContext): Promise<SearchResponse> {
+		if (!ctx.apiKey) throw new Error("iFlow requires an API key");
 
-	constructor(private readonly apiKey: string) {}
-
-	async search(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
-		const res = await fetch(`${BASE}/api/search/webSearch`, {
+		const res = await ctx.request(`${BASE}/api/search/webSearch`, {
 			method: "POST",
-			headers: authHeaders(this.apiKey),
+			headers: authHeaders(ctx.apiKey),
 			body: JSON.stringify({ keywords: query, num: maxResults }),
-			signal: withTimeout(signal),
 		});
 
 		if (!res.ok) {
@@ -113,14 +79,15 @@ export class IflowProvider implements Provider {
 		}
 
 		return { results: normalizeResults(data.data?.organic ?? []) };
-	}
+	},
 
-	async fetch(url: string, signal?: AbortSignal): Promise<FetchResponse> {
-		const res = await fetch(`${BASE}/api/search/webFetch`, {
+	async fetch(url: string, ctx: ProviderContext): Promise<FetchResponse> {
+		if (!ctx.apiKey) throw new Error("iFlow requires an API key");
+
+		const res = await ctx.request(`${BASE}/api/search/webFetch`, {
 			method: "POST",
-			headers: authHeaders(this.apiKey),
+			headers: authHeaders(ctx.apiKey),
 			body: JSON.stringify({ url }),
-			signal: withTimeout(signal),
 		});
 
 		if (!res.ok) {
@@ -142,14 +109,7 @@ export class IflowProvider implements Provider {
 			title: data.data?.title,
 			contentType: "text/markdown",
 		};
-	}
-}
-
-export default defineProvider({
-	...IFLOW_META,
-	apiKeyRequired: true,
-	create: ({ apiKey }) => {
-		if (!apiKey) throw new Error("iFlow requires an API key");
-		return new IflowProvider(apiKey);
 	},
-});
+};
+
+export default defineProvider(iflowProvider);

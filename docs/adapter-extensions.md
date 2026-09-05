@@ -1,10 +1,8 @@
 # pi-search Adapter Extension Contract
 
-Custom provider adapters give pi-search file-level plug and play: drop a
-TypeScript file into the user adapter directory, reload, and the provider is
-registered — no package edits, no registry changes.
+Custom provider adapters give pi-search file-level plug-and-play capability: drop a TypeScript or JavaScript file into the user adapter directory, reload, and the provider is registered — no package edits, no registry changes.
 
-## Directory layout
+## Directory Layout
 
 User adapters are discovered from Pi's resolved agent directory:
 
@@ -14,109 +12,82 @@ User adapters are discovered from Pi's resolved agent directory:
   providers/         # custom provider adapter files
 ```
 
-`<agent-dir>` is `PI_CODING_AGENT_DIR` or `~/.pi/agent` (XDG layouts work
-through `PI_CODING_AGENT_DIR`). Adapter files may be `.ts` or `.js`. Files
-named `index.*`, `types.*`, `*.test.*`, `*.spec.*`, and `*.d.ts` are ignored.
-Subdirectories are not scanned.
+`<agent-dir>` is `PI_CODING_AGENT_DIR` or `~/.pi/agent` (XDG layouts work through `PI_CODING_AGENT_DIR`). Adapter files may be `.ts` or `.js`. Files named `index.*`, `types.*`, `*.test.*`, `*.spec.*`, and `*.d.ts` are ignored. Subdirectories are not scanned.
 
-## Adapter file shape
+## Adapter File Shape
 
-Each file default-exports a `ProviderAdapter` produced by `defineProvider`:
+Each file default-exports a `Provider` object produced by `defineProvider`:
 
 ```ts
-import { defineProvider, type Provider } from "@hyav/pi-search";
-
-class MyProvider implements Provider {
-  // Implement the methods promised by capabilities:
-  //   search(query, maxResults, signal?)
-  //   fetch(url, signal?)
-  //   verticalSearch(domain, subDomain, query, maxResults, signal?)
-  //   batchSearch(queries, maxResults, signal?)
-  //   crawl(url, maxPages, signal?)
-  //   map(url, signal?)
-  //   research(query, signal?)
-}
+import { defineProvider, type ProviderContext, type SearchResponse, type FetchResponse } from "@hyav/pi-search";
 
 export default defineProvider({
   name: "my-provider",            // unique ID; same-name overrides built-in
-  label: "My Provider",           // human-readable name
+  label: "My Provider",           // human-readable display name
   envVar: "MY_PROVIDER_API_KEY",  // environment variable for the API key
-  capabilities: {
-    generalSearch: true,
-    verticalSearch: false,
-    contentExtraction: true,
-    crawl: false,
-    siteMap: false,
-    deepResearch: false,
-    batchSearch: false,
-    hasMetadata: false,
+  keyless: false,                 // optional: true if provider functions without an API key
+
+  searchHint: "When to prefer this provider for search.",
+  fetchHint: "When to prefer this provider for fetch.",
+
+  async search(query: string, maxResults: number, ctx: ProviderContext): Promise<SearchResponse> {
+    const res = await ctx.request(`https://api.myprovider.com/search?q=${encodeURIComponent(query)}&n=${maxResults}`);
+    const data = await res.json();
+    return {
+      results: data.items.map((item: any) => ({
+        title: item.title,
+        url: item.link,
+        snippet: item.snippet,
+      })),
+    };
   },
-  searchHint: "When to prefer this provider for web_search.",
-  fetchHint: "When to prefer this provider for web_fetch.",
-  searchFallbackPriority: 20,     // lower = tried first in the search chain
-  fetchFallbackPriority: 20,      // lower = tried first in the fetch chain
-  apiKeyRequired: false,          // true (default) requires a key to instantiate
-  create: ({ apiKey }) => new MyProvider(apiKey),
+
+  async fetch(url: string, ctx: ProviderContext): Promise<FetchResponse> {
+    const res = await ctx.request(`https://api.myprovider.com/extract?url=${encodeURIComponent(url)}`);
+    const data = await res.json();
+    return {
+      title: data.title,
+      text: data.content,
+    };
+  },
 });
 ```
 
-`defineProvider` is pure: it validates the declaration and returns the adapter
-unchanged. The loader registers the default export after a successful import.
+`defineProvider` is a pure validator: it validates the declaration at load time and returns the provider object unchanged.
 
-## Validation rules
+## Validation Rules
 
-An invalid declaration throws during load; the file is skipped with a warning
-and the remaining files still load. Rules:
+An invalid declaration throws during load; the file is skipped with a warning and the remaining files still load.
 
 - `name`, `label`, and `envVar` are required non-empty strings.
-- `capabilities` and `create()` are required. Every capability flag must be a
-  boolean, `apiKeyRequired` (when present) must be a boolean, and the fallback
-  priorities (when present) must be finite numbers.
-- `verticals`, when present, must be an array of non-empty strings.
-- `generalSearch: true` requires `searchHint` and `searchFallbackPriority`.
-- `contentExtraction: true` requires `fetchHint` and `fetchFallbackPriority`.
-- Declaring `searchHint` or `searchFallbackPriority` with
-  `generalSearch: false` is rejected.
-- Declaring `verticals` with `verticalSearch: false` is rejected.
+- Must implement at least one operation: `search` or `fetch`.
+- If `search` is implemented, `searchHint` is required.
+- If `fetch` is implemented, `fetchHint` is required.
+- `keyless` (when present) must be a boolean.
+- Legacy v0.1 fields (`create`, `capabilities`, `searchFallbackPriority`, `fetchFallbackPriority`) are strictly rejected with an explicit migration error message.
 
-## Conflicts and override semantics
+## ProviderContext
 
-Built-in providers register first at module load; user adapters load after, so
-a user adapter with the same `name` overrides the built-in registration. The
-overridden metadata and factory are replaced in place; routing, fallback
-chains, and the tool schemas pick up the override automatically. Re-registration
-logs a warning naming the provider.
+Methods receive a `ProviderContext` parameter providing:
 
-## Loading and /reload
+- `apiKey`: The resolved API key (from stored config or environment variable), or `undefined` if keyless.
+- `signal`: An `AbortSignal` for cancellation propagation.
+- `request(url, init)`: An HTTP helper wrapping `fetch` with an automatic 30-second timeout, 10 MiB buffer limit, and abortion signal handling.
 
-Adapters load at extension startup, before the `web_search` and `web_fetch`
-tools register their schemas, so new providers appear in the provider enums
-immediately. On `/reload`, the extension re-runs discovery: cached modules
-under the adapter root are dropped, so edits to existing files are re-read
-from disk; removed files disappear; broken files are skipped with a warning.
+## Conflicts and Override Semantics
 
-## Import rules for adapter files
+Built-in providers register first at module load; user adapters load after, so a user adapter with the same `name` overrides the built-in registration. The overridden metadata is replaced in place. Deleting a user adapter that overrode a built-in provider and reloading with `/reload` automatically restores the built-in provider.
 
-- Adapter files import `defineProvider`, `registerProvider`, and the shared
-  types (`Provider`, `ProviderCapabilities`, ...) from `@hyav/pi-search`.
-  The loader aliases this package name to the package's adapter API, so it
-  resolves regardless of local installs.
-- Adapter files must not runtime-import Pi's bundled packages
-  (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
-  `@earendil-works/pi-ai`); type-only imports are fine. Runtime values such as
-  the agent directory and configuration are resolved by the host, not by
-  adapter files.
-- API keys: the host resolves them from the adapter's `envVar` environment
-  variable first, then from `config.apiKeys[name]` in
-  `<agent-dir>/extensions/pi-search/config.json`.
-- Adapter code runs with the user's full system privileges and can execute
-  arbitrary code. Only install adapters from sources you trust.
+## Loading and `/reload`
 
-## Reference templates
+Adapters load at extension startup. On `/reload`, the extension re-runs discovery: cached modules under the adapter root are dropped, so edits to existing files are re-read from disk; removed files disappear; broken files are skipped with a warning.
 
-The built-in providers under the package's `src/providers/` (`tavily.ts`,
-`anysearch.ts`, `jina.ts`) are reference templates with this exact shape —
-copy one and customize it. Complete non-built-in references for DeepSeek,
-Doubao Search, Exa, Firecrawl, Gemini, iFlow, and Serper live under
-[`examples/search-providers`](../examples/search-providers/). `src/adapter-loader.ts`
-documents the discovery implementation.
+## Import Rules for Adapter Files
+
+- Adapter files import `defineProvider`, `registerProvider`, and shared types (`Provider`, `ProviderContext`, `SearchResponse`, `FetchResponse`) from `@hyav/pi-search`. The loader aliases this package name to the package's internal adapter API, so it resolves regardless of local installs.
+- Adapter files must not runtime-import Pi's bundled packages (`@earendil-works/*`); type-only imports are fine.
+- Adapter code runs with the user's full system privileges and can execute arbitrary code. Only install adapters from sources you trust.
+
+## Reference Templates
+
+The built-in providers under `src/providers/` (`tavily.ts`, `anysearch.ts`, `jina.ts`, `exa.ts`, `serper.ts`, `firecrawl.ts`, `brave.ts`, `tinyfish.ts`, `serpapi.ts`) serve as reference templates. Additional non-built-in examples (DeepSeek, Doubao, Gemini, iFlow) live under [`examples/search-providers`](../examples/search-providers/).

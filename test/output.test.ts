@@ -1,34 +1,23 @@
 import assert from "node:assert";
 import { readFile, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
-	type ExtensionAPI,
 	type ExtensionContext,
-	type ToolDefinition,
 	type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
+import { registerProvider, unregisterProvider } from "../src/adapter-api.js";
 import { limitToolOutput } from "../src/output.js";
-import { fetchCache, registerWebFetchTool } from "../src/web-fetch.js";
+import type { Provider } from "../src/providers/types.js";
+import { buildFetchToolDefinition } from "../src/web-fetch.js";
 
 function assertOutputBudget(text: string): void {
 	const bytes = Buffer.byteLength(text, "utf8");
 	const lines = text ? text.split("\n").length - Number(text.endsWith("\n")) : 0;
 	assert.ok(bytes <= DEFAULT_MAX_BYTES, `${bytes} bytes exceeds ${DEFAULT_MAX_BYTES}`);
 	assert.ok(lines <= DEFAULT_MAX_LINES, `${lines} lines exceeds ${DEFAULT_MAX_LINES}`);
-}
-
-function registeredFetchTool(): Pick<ToolDefinition, "execute"> {
-	let tool: Pick<ToolDefinition, "execute"> | undefined;
-	registerWebFetchTool({
-		registerTool(definition) {
-			tool = definition;
-		},
-	} as ExtensionAPI);
-	assert.ok(tool);
-	return tool;
 }
 
 describe("tool output budget", () => {
@@ -78,8 +67,28 @@ describe("tool output budget", () => {
 	}
 });
 
-describe("web_fetch output budget", () => {
-	for (const { name, text, title, raw, url = "https://example.com/output" } of [
+describe("fetch output budget", () => {
+	let currentMockResult: { text: string; title?: string } = { text: "body", title: "Page title" };
+	const mockProvider: Provider = {
+		name: "test-fetcher",
+		label: "Test Fetcher",
+		envVar: "TEST_FETCHER_API_KEY",
+		keyless: true,
+		fetchHint: "mock hint",
+		async fetch(_url, _ctx) {
+			return currentMockResult;
+		},
+	};
+
+	before(() => {
+		registerProvider(mockProvider, "user");
+	});
+
+	after(() => {
+		unregisterProvider("test-fetcher");
+	});
+
+	for (const { name, text, title, url = "https://example.com/output" } of [
 		{ name: "a body at the byte limit", text: "x".repeat(DEFAULT_MAX_BYTES) },
 		{ name: "a body at the line limit", text: Array(DEFAULT_MAX_LINES).fill("line").join("\n") },
 		{ name: "an oversized body", text: `${"x".repeat(1023)}\n`.repeat(51) },
@@ -90,16 +99,14 @@ describe("web_fetch output budget", () => {
 			text: "body",
 			url: `https://example.com/${"u".repeat(DEFAULT_MAX_BYTES)}`,
 		},
-		{ name: "raw HTML", text: `<!doctype html>\n${"<p>original HTML</p>\n".repeat(3000)}`, raw: true },
 	]) {
 		it(`bounds headers, body, and notice for ${name}`, async (t) => {
-			const cacheKey = `${url}_${raw ?? false}_auto`;
-			fetchCache.set(cacheKey, { result: { text, title }, provider: raw ? "direct" : "tavily" });
-			t.after(() => fetchCache.clear());
+			currentMockResult = { text, title };
 
-			const result = await registeredFetchTool().execute(
+			const tool = buildFetchToolDefinition([mockProvider], {});
+			const result = await tool.execute(
 				"id",
-				{ url, raw },
+				{ url, providers: ["test-fetcher"] },
 				undefined,
 				undefined,
 				{} as ExtensionContext,
@@ -114,31 +121,31 @@ describe("web_fetch output budget", () => {
 			if (content?.type !== "text") throw new Error("Expected text output");
 			assertOutputBudget(content.text);
 			assert.ok(details.truncation?.truncated);
-			assert.ok(details.fullOutputPath);
-			assert.ok(content.text.includes(details.fullOutputPath));
-			assert.strictEqual(await readFile(details.fullOutputPath, "utf8"), text);
+			const fullOutputPath = details.fullOutputPath;
+			assert.ok(fullOutputPath);
+			assert.ok(content.text.includes(fullOutputPath));
+			const saved = await readFile(fullOutputPath, "utf8");
+			assert.ok(saved.includes(text));
 		});
 	}
 
-	it("preserves headers and body when the complete response fits", async (t) => {
+	it("preserves headers and body when the complete response fits", async () => {
 		const url = "https://example.com/small";
 		const text = "<p>original HTML</p>\n";
-		fetchCache.set(`${url}_true_auto`, { result: { text, title: "Page title" }, provider: "direct" });
-		t.after(() => fetchCache.clear());
+		currentMockResult = { text, title: "Page title" };
 
-		const result = await registeredFetchTool().execute(
+		const tool = buildFetchToolDefinition([mockProvider], {});
+		const result = await tool.execute(
 			"id",
-			{ url, raw: true },
+			{ url, providers: ["test-fetcher"] },
 			undefined,
 			undefined,
 			{} as ExtensionContext,
 		);
-		assert.deepStrictEqual(result.content, [
-			{
-				type: "text",
-				text: `**URL:** ${url}\n**Provider:** direct\n**Title:** Page title\n**Mode:** raw\n${text}`,
-			},
-		]);
+		assert.strictEqual(
+			result.content[0]?.text,
+			`**URL:** ${url}\n**Provider:** test-fetcher\n**Title:** Page title\n\n${text}`,
+		);
 		assert.strictEqual((result.details as { fullOutputPath?: string }).fullOutputPath, undefined);
 	});
 });

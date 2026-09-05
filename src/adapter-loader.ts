@@ -96,8 +96,8 @@ export async function loadUserAdapters(options: AdapterLoaderOptions = {}): Prom
 	for (const path of await discoverAdapterPaths(userRoot)) {
 		try {
 			const adapter = (await jiti.import(path, { default: true })) as unknown;
-			if (adapter === null || typeof adapter !== "object" || !("name" in adapter) || !("create" in adapter)) {
-				throw new TypeError("default export must be a ProviderAdapter from defineProvider()");
+			if (adapter === null || typeof adapter !== "object") {
+				throw new TypeError("default export must be a Provider object");
 			}
 			registerProvider(adapter as ProviderAdapter, "user");
 			loadedNames.add((adapter as ProviderAdapter).name);

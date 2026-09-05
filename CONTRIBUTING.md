@@ -41,7 +41,7 @@ The ordinary gate must not call live Provider search or extraction APIs or requi
 ## Changes and review
 
 - Public behavior changes must include behavior-focused tests and documentation updates.
-- Built-in providers use the same `defineProvider()` adapter shape as user adapters; the file-level plug-and-play contract lives in [docs/adapter-extensions.md](docs/adapter-extensions.md) (also in Chinese) and must stay in sync with `src/adapter-api.ts` validation rules.
+- Built-in providers use the same `defineProvider()` adapter shape as user adapters; the file-level plug-and-play contract lives in the [adapter extension contract](https://github.com/hyav/pi-search/blob/v0.2.0/docs/adapter-extensions.md) (also in Chinese) and must stay in sync with `src/adapter-api.ts` validation rules.
 - Keep `README.md` canonical and update `README.zh-CN.md` when user-visible behavior changes.
 - Update [CHANGELOG.md](CHANGELOG.md) for release-relevant behavior, compatibility, security, or migration changes.
 - Preserve the package boundary in `package.json.files`; tests, documentation, and maintainer adapters must not enter the npm artifact.

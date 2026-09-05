@@ -1,12 +1,11 @@
 import assert from "node:assert";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { loadConfig, resolveApiKey, type SearchConfig } from "../src/config.js";
-import { resolveMaxResults } from "../src/web-search.js";
+import { loadConfig, resolveProviderCredential, type SearchConfig, saveApiKey, updateConfig } from "../src/config.js";
 
-describe("API Key Resolution Logic (resolveApiKey)", () => {
+describe("Credential Resolution Logic (stored > env > keyless)", () => {
 	const mockConfig: SearchConfig = {
 		apiKeys: {
 			tavily: "config-tavily-key",
@@ -14,136 +13,153 @@ describe("API Key Resolution Logic (resolveApiKey)", () => {
 		},
 	};
 
-	it("should load API keys from a config.json file", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-search-config-"));
+	it("prioritizes stored key over environment variable (stored > env)", () => {
+		const env = { TAVILY_API_KEY: "env-tavily-key" };
+		const cred = resolveProviderCredential({ name: "tavily", envVar: "TAVILY_API_KEY" }, mockConfig, env);
+		assert.strictEqual(cred.status, "stored");
+		assert.strictEqual(cred.displayStatus, "✓ stored");
+		assert.strictEqual(cred.apiKey, "config-tavily-key");
+	});
+
+	it("falls back to environment variable when stored key is not set", () => {
+		const env = { BRAVE_API_KEY: "env-brave-key" };
+		const cred = resolveProviderCredential({ name: "brave", envVar: "BRAVE_API_KEY" }, mockConfig, env);
+		assert.strictEqual(cred.status, "env");
+		assert.strictEqual(cred.displayStatus, "✓ env: BRAVE_API_KEY");
+		assert.strictEqual(cred.apiKey, "env-brave-key");
+	});
+
+	it("falls back to keyless when neither stored nor env is present and provider is keyless", () => {
+		const cred = resolveProviderCredential({ name: "jina", envVar: "JINA_API_KEY", keyless: true }, mockConfig, {});
+		assert.strictEqual(cred.status, "keyless");
+		assert.strictEqual(cred.displayStatus, "✓ keyless");
+		assert.strictEqual(cred.apiKey, undefined);
+	});
+
+	it("reports unconfigured when key is required but neither stored nor env is set", () => {
+		const cred = resolveProviderCredential(
+			{ name: "serper", envVar: "SERPER_API_KEY", keyless: false },
+			mockConfig,
+			{},
+		);
+		assert.strictEqual(cred.status, "unconfigured");
+		assert.strictEqual(cred.displayStatus, "• unconfigured");
+		assert.strictEqual(cred.apiKey, undefined);
+	});
+
+	it("ignores whitespace-only stored or env values", () => {
+		const configWithEmpty: SearchConfig = { apiKeys: { exa: "   " } };
+		const envWithEmpty = { EXA_API_KEY: "   " };
+		const cred = resolveProviderCredential(
+			{ name: "exa", envVar: "EXA_API_KEY", keyless: false },
+			configWithEmpty,
+			envWithEmpty,
+		);
+		assert.strictEqual(cred.status, "unconfigured");
+	});
+
+	it("handles non-string apiKey values safely without crashing", () => {
+		const corruptConfig = { apiKeys: { exa: 12345 } } as unknown as SearchConfig;
+		const cred = resolveProviderCredential({ name: "exa", envVar: "EXA_API_KEY" }, corruptConfig, {});
+		assert.strictEqual(cred.status, "unconfigured");
+	});
+
+	it("loadConfig returns default config when file contains an array", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-search-array-"));
+		const configPath = join(dir, "config.json");
+		try {
+			writeFileSync(configPath, JSON.stringify(["not", "an", "object"]));
+			const loaded = loadConfig(configPath);
+			assert.deepStrictEqual(loaded, {});
+			assert.strictEqual(Array.isArray(loaded), false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("Config persistence and safe atomic writing", () => {
+	it("saves apiKey with atomic write and 0600 mode, preserving existing fields", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-search-save-"));
 		const configPath = join(dir, "config.json");
 		try {
 			writeFileSync(
 				configPath,
-				JSON.stringify({ apiKeys: { tavily: "file-tavily-key", anysearch: "file-anysearch-key" } }),
+				JSON.stringify({
+					apiKeys: { existing: "key-1" },
+					defaults: { max_results: 8 },
+					customSetting: true,
+				}),
 			);
-			const config = loadConfig(configPath);
-			assert.deepStrictEqual(config.apiKeys, {
-				tavily: "file-tavily-key",
-				anysearch: "file-anysearch-key",
-			});
+
+			await saveApiKey("exa", "new-exa-key", configPath);
+
+			const updated = loadConfig(configPath);
+			assert.strictEqual(updated.apiKeys?.existing, "key-1");
+			assert.strictEqual(updated.apiKeys?.exa, "new-exa-key");
+			assert.strictEqual(updated.defaults?.max_results, 8);
+			assert.strictEqual(updated.customSetting, true);
+
+			const mode = statSync(configPath).mode & 0o777;
+			assert.strictEqual(mode, 0o600);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	it("should resolve extension config under Pi's agent directory", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-search-agent-dir-"));
-		const extensionConfigDir = join(dir, "extensions", "pi-search");
-		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-		try {
-			mkdirSync(extensionConfigDir, { recursive: true });
-			writeFileSync(
-				join(extensionConfigDir, "config.json"),
-				JSON.stringify({ apiKeys: { tavily: "agent-dir-tavily-key" } }),
-			);
-			process.env.PI_CODING_AGENT_DIR = dir;
-
-			const config = loadConfig();
-			assert.strictEqual(config.apiKeys?.tavily, "agent-dir-tavily-key");
-		} finally {
-			if (originalAgentDir === undefined) {
-				delete process.env.PI_CODING_AGENT_DIR;
-			} else {
-				process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-			}
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("should ignore legacy config paths outside extensions/pi-search", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-search-legacy-"));
-		const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-		try {
-			for (const legacy of [join(dir, "pi-search"), join(dir, "pi-search-kit")]) {
-				mkdirSync(legacy);
-				writeFileSync(join(legacy, "config.json"), JSON.stringify({ apiKeys: { tavily: "legacy-key" } }));
-			}
-			process.env.PI_CODING_AGENT_DIR = dir;
-
-			const config = loadConfig();
-			assert.strictEqual(config.apiKeys?.tavily, undefined, "legacy config paths must not be read");
-		} finally {
-			if (originalAgentDir === undefined) {
-				delete process.env.PI_CODING_AGENT_DIR;
-			} else {
-				process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-			}
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("should load defaults.max_results for web_search", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-search-config-"));
+	it("deletes key when empty or undefined is passed", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-search-delete-"));
 		const configPath = join(dir, "config.json");
 		try {
-			writeFileSync(configPath, JSON.stringify({ defaults: { max_results: 8 } }));
-			const config = loadConfig(configPath);
-			assert.strictEqual(config.defaults?.max_results, 8);
-			assert.strictEqual(resolveMaxResults(undefined, config), 8);
+			writeFileSync(configPath, JSON.stringify({ apiKeys: { to_delete: "val", keep: "val2" } }));
+
+			await saveApiKey("to_delete", undefined, configPath);
+
+			const updated = loadConfig(configPath);
+			assert.strictEqual(updated.apiKeys?.to_delete, undefined);
+			assert.strictEqual(updated.apiKeys?.keep, "val2");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	it("should prioritize environment variable over config file value", () => {
-		const originalEnv = process.env.TAVILY_API_KEY;
+	it("refuses to overwrite corrupted config file", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-search-corrupted-"));
+		const configPath = join(dir, "config.json");
 		try {
-			process.env.TAVILY_API_KEY = "env-tavily-override";
-			const resolved = resolveApiKey("tavily", "TAVILY_API_KEY", mockConfig);
-			assert.strictEqual(resolved, "env-tavily-override");
+			writeFileSync(configPath, "{ not valid json ... ");
+
+			await assert.rejects(() => saveApiKey("exa", "key", configPath), /corrupted/);
+
+			// Check file content was not overwritten
+			assert.strictEqual(readFileSync(configPath, "utf-8"), "{ not valid json ... ");
 		} finally {
-			if (originalEnv === undefined) {
-				delete process.env.TAVILY_API_KEY;
-			} else {
-				process.env.TAVILY_API_KEY = originalEnv;
-			}
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	it("should fall back to config file when env variable is not set", () => {
-		const originalEnv = process.env.EXA_API_KEY;
+	it("updateConfig atomically reads and updates configuration", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-search-update-"));
+		const configPath = join(dir, "config.json");
 		try {
-			delete process.env.EXA_API_KEY;
-			const resolved = resolveApiKey("exa", "EXA_API_KEY", mockConfig);
-			assert.strictEqual(resolved, "config-exa-key");
-		} finally {
-			if (originalEnv !== undefined) {
-				process.env.EXA_API_KEY = originalEnv;
-			}
-		}
-	});
+			writeFileSync(configPath, JSON.stringify({ defaults: { max_results: 5 } }));
 
-	it("should return undefined if neither environment variable nor config value exists", () => {
-		const originalEnv = process.env.ANYSEARCH_API_KEY;
-		try {
-			delete process.env.ANYSEARCH_API_KEY;
-			const resolved = resolveApiKey("anysearch", "ANYSEARCH_API_KEY", mockConfig);
-			assert.strictEqual(resolved, undefined);
-		} finally {
-			if (originalEnv !== undefined) {
-				process.env.ANYSEARCH_API_KEY = originalEnv;
-			}
-		}
-	});
+			const updated = await updateConfig((cfg) => {
+				return {
+					...cfg,
+					defaults: { ...cfg.defaults, max_results: 10 },
+					custom: "test",
+				};
+			}, configPath);
 
-	it("should ignore empty/whitespace environment variables and fall back to config", () => {
-		const originalEnv = process.env.TAVILY_API_KEY;
-		try {
-			process.env.TAVILY_API_KEY = "   "; // Whitespace env var
-			const resolved = resolveApiKey("tavily", "TAVILY_API_KEY", mockConfig);
-			assert.strictEqual(resolved, "config-tavily-key");
+			assert.strictEqual(updated.defaults?.max_results, 10);
+			assert.strictEqual(updated.custom, "test");
+
+			const onDisk = loadConfig(configPath);
+			assert.strictEqual(onDisk.defaults?.max_results, 10);
+			assert.strictEqual(onDisk.custom, "test");
 		} finally {
-			if (originalEnv === undefined) {
-				delete process.env.TAVILY_API_KEY;
-			} else {
-				process.env.TAVILY_API_KEY = originalEnv;
-			}
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

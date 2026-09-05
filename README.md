@@ -2,18 +2,19 @@
 
 [简体中文](README.zh-CN.md)
 
-An LLM-routed web search and content extraction extension for [Pi](https://pi.dev), with built-in Tavily and AnySearch search plus Tavily, AnySearch, and Jina extraction.
+A focused web search and content extraction extension for [Pi](https://pi.dev), providing two explicit tools (`search` and `fetch`), an interactive `/search` command, and 9 built-in providers.
 
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
 
 ## Highlights
 
-- LLM routing based on provider capability metadata instead of a hard-coded classifier
-- Keyless search and extraction paths with cost-aware fallback
+- Two streamlined tools: `search` and `fetch`, requiring explicit `providers` selection
+- Interactive `/search` command to inspect provider status and manage API keys
+- Multi-provider concurrency (up to 3 providers) with input order preservation and partial failure aggregation
+- 9 built-in providers: Tavily, AnySearch, Jina, Exa, Serper, Firecrawl, Brave, TinyFish, and SerpApi
+- Unified credential resolution priority: `stored > env > keyless`, storing keys securely in `<agent-dir>/extensions/pi-search/config.json` (0600 permissions)
 - File-level plug-and-play custom provider adapters under `<agent-dir>/extensions/pi-search/providers/`
-- General and vertical search plus web and PDF extraction
-- SSRF defenses for direct fetches, bounded responses, cancellation, and timeouts
-- Deduplicated output capped to Pi's 2,000-line or 50 KiB tool limit, with full results saved to a temporary file
+- Tool output strictly bounded to Pi's 2,000-line or 50 KiB limit, with full results preserved in a temporary file
 
 ## Install
 
@@ -23,84 +24,148 @@ Requires Node.js 22.19.0 or newer and Pi.
 pi install npm:@hyav/pi-search
 ```
 
-Ask Pi for information that requires a live web search. A successful installation exposes `web_search` and `web_fetch` and returns structured results from a selected built-in provider.
+Once installed, pi-search exposes the `/search` command and dynamically registers `search` and `fetch` based on configured providers.
+
+## Built-in Providers
+
+| Provider | Method | Environment Variable | Keyless | Description |
+|---|---|---|---|---|
+| Tavily | search, fetch | `TAVILY_API_KEY` | Yes | General web search and clean text extraction |
+| AnySearch | search, fetch | `ANYSEARCH_API_KEY` | Yes | Multi-engine aggregator with fast structured extraction |
+| Jina | fetch | `JINA_API_KEY` | Yes | Fast reader converting web pages and PDF files into clean Markdown |
+| Exa | search, fetch | `EXA_API_KEY` | No | Neural/semantic search engine with content retrieval |
+| Serper | search | `SERPER_API_KEY` | No | Google Search API with structured snippets |
+| Firecrawl | search, fetch | `FIRECRAWL_API_KEY` | No | Web scraper and search returning clean Markdown |
+| Brave | search | `BRAVE_API_KEY` | No | Independent search index with structured results |
+| TinyFish | search, fetch | `TINYFISH_API_KEY` | No | High-speed AI search engine and web extractor |
+| SerpApi | search | `SERPAPI_API_KEY` | No | Google and multi-engine SERP scraping API |
+
+Tavily, AnySearch, and Jina support keyless access out of the box. Supplying an optional API key provides higher rate limits and higher concurrency.
 
 ## Configure
 
-Built-in Tavily and AnySearch search and Jina extraction work without API keys. Optional credentials unlock provider-specific capabilities:
+### Interactive `/search` Command
 
-| Provider | Environment variable | Effect |
-|---|---|---|
-| Tavily | `TAVILY_API_KEY` | Enables authenticated crawl, map, and research capabilities |
-| AnySearch | `ANYSEARCH_API_KEY` | Authenticates general, vertical, and extraction requests |
-| Jina | `JINA_API_KEY` | Authenticates web and PDF extraction |
+Run `/search` inside Pi to inspect provider status, add or update API keys, or clear stored credentials:
 
-Environment variables take precedence over `<agent-dir>/extensions/pi-search/config.json`, where `<agent-dir>` is `PI_CODING_AGENT_DIR` or `~/.pi/agent` (XDG layouts such as `$XDG_CONFIG_HOME/pi/agent` work through `PI_CODING_AGENT_DIR`). Keep credential files readable only by your user. The optional `defaults.max_results` integer sets the `web_search` default when a call omits `max_results` (valid range: 1–20):
+```text
+/search
+```
+
+Keys configured via `/search` are written to `<agent-dir>/extensions/pi-search/config.json` with strict 0600 permissions. Upon modification, tool definitions and candidate lists refresh immediately.
+
+### Credential Priority
+
+Credentials resolve in the following order:
+
+1. **Stored**: Keys saved in `<agent-dir>/extensions/pi-search/config.json` under `apiKeys`
+2. **Environment**: Environment variables declared by the provider (e.g. `TAVILY_API_KEY`)
+3. **Keyless**: Built-in keyless support (e.g. Jina fetch)
+
+`<agent-dir>` is resolved from `PI_CODING_AGENT_DIR` or defaults to `~/.pi/agent`.
+
+### Configuration Options
+
+`<agent-dir>/extensions/pi-search/config.json` supports optional defaults:
 
 ```json
 {
-  "defaults": { "max_results": 8 }
+  "apiKeys": {
+    "tavily": "tvly-...",
+    "exa": "..."
+  },
+  "defaults": {
+    "max_results": 8
+  }
 }
 ```
 
+The `defaults.max_results` integer sets the default result count for `search` when omitted (valid range: 1–20).
 
 ## Use
 
-The model calls `web_search` and `web_fetch` directly. Omit `provider` by default to keep automatic fallback enabled; set it only when the user explicitly requests a provider or a provider-specific capability is required. Without an explicit provider, the fallback order is:
+### `search`
 
-- Search: Tavily → AnySearch
-- Extraction: Tavily → Jina → AnySearch
+Executes search across one or more specified providers with bounded concurrency (up to 3 providers in parallel).
 
-An explicitly selected provider never falls back silently; its failure is returned directly. `research=true` is Tavily-only: both supporting search sources and the report come from Tavily, and it cannot be combined with `vertical`. If no configured or keyless providers match the requested capability, the tool fails with an explicit actionable error message.
+```json
+{
+  "query": "nodejs 22 release notes",
+  "providers": ["tavily", "brave"],
+  "max_results": 5
+}
+```
 
-## Custom providers
+- `query` (required): The search query string.
+- `providers` (required): Array of candidate provider names. Single provider for standard search; multiple providers for cross-comparison and wider coverage.
+- `max_results` (optional): Maximum results per provider (defaults to configured setting or 5).
 
-Custom provider adapters are plain TypeScript files discovered at startup (and re-discovered by `/reload`) from your Pi agent directory:
+### `fetch`
+
+Extracts content from a URL using specified providers.
+
+```json
+{
+  "url": "https://example.com/article",
+  "providers": ["jina"]
+}
+```
+
+- `url` (required): Target HTTP(S) URL to extract.
+- `providers` (required): Array of candidate provider names (e.g. `["jina"]`, `["firecrawl"]`).
+
+## Custom Providers
+
+Add custom provider adapters as plain TypeScript or JavaScript files under your agent directory:
 
 ```text
 <agent-dir>/extensions/pi-search/providers/
   my-provider.ts
 ```
 
-Drop a file in — one provider per file — and it registers automatically. A file declaring the same `name` as a built-in provider overrides it. Adapter files import `defineProvider` from this package and default-export an adapter:
+Each file default-exports a `Provider` object using `defineProvider`:
 
 ```ts
-import { defineProvider, type Provider } from "@hyav/pi-search";
-
-class MyProvider implements Provider {
-  // search(), fetch(), ... per the declared ProviderCapabilities
-}
+import { defineProvider, type ProviderContext } from "@hyav/pi-search";
 
 export default defineProvider({
   name: "my-provider",
   label: "My Provider",
   envVar: "MY_PROVIDER_API_KEY",
-  capabilities: {
-    generalSearch: true,
-    verticalSearch: false,
-    contentExtraction: true,
-    crawl: false,
-    siteMap: false,
-    deepResearch: false,
-    batchSearch: false,
-    hasMetadata: false,
+  searchHint: "Use for specialized domain queries.",
+  fetchHint: "Use for specific site extractions.",
+
+  async search(query: string, maxResults: number, ctx: ProviderContext) {
+    const res = await ctx.request(`https://api.myprovider.com/search?q=${encodeURIComponent(query)}&n=${maxResults}`);
+    const data = await res.json();
+    return {
+      results: data.items.map((item: any) => ({
+        title: item.title,
+        url: item.link,
+        snippet: item.snippet,
+      })),
+    };
   },
-  searchHint: "...",
-  fetchHint: "...",
-  searchFallbackPriority: 20,
-  fetchFallbackPriority: 20,
-  apiKeyRequired: false,
-  create: ({ apiKey }) => new MyProvider(apiKey),
+
+  async fetch(url: string, ctx: ProviderContext) {
+    const res = await ctx.request(`https://api.myprovider.com/extract?url=${encodeURIComponent(url)}`);
+    const data = await res.json();
+    return {
+      title: data.title,
+      text: data.content,
+    };
+  },
 });
 ```
 
-See the [adapter extension contract](https://github.com/hyav/pi-search/blob/main/docs/adapter-extensions.md) for the full file shape, validation rules, conflicts, and reload behavior. The built-in providers under the package's `src/providers/` are reference templates with this exact shape — copy one and customize it. A repository-only collection of non-built-in DeepSeek, Doubao Search, Exa, Firecrawl, Gemini, iFlow, and Serper adapters is available under [`examples/search-providers`](examples/search-providers/). Adapter files must not runtime-import Pi's bundled packages (`@earendil-works/*`); type-only imports are fine. Add, remove, or modify files, then run `/reload` to rediscover them without touching the package.
+See the [adapter extension contract](https://github.com/hyav/pi-search/blob/v0.2.0/docs/adapter-extensions.md) for full contract details, validation rules, and context methods. Use `/reload` inside Pi to rediscover newly added or edited adapters.
 
-Adapter files run with your full system privileges and can execute arbitrary code — only install adapters from sources you trust.
+## Security & Privacy
 
-## Before you use it
-
-Search queries, requested URLs, and extracted content are sent to the selected external provider and remain subject to its pricing and data policies. Oversized results are retained in an operating-system temporary directory until you remove them or the OS cleans them up.
+- External Network Calls: Search queries and requested URLs are sent to the explicitly chosen external provider and are subject to its data and privacy policies.
+- Custom Adapters: Files under `<agent-dir>/extensions/pi-search/providers/` are user-supplied code executed with Pi's full system privileges; install only adapters you trust.
+- SSRF Defenses: Built-in URL validation rejects non-HTTP(S) URLs and invalid formats before network transmission. Provider requests enforce a 30-second timeout and 10 MiB payload limits.
+- Output Budgeting: Tool responses are strictly capped to 2,000 lines or 50 KiB. Complete outputs exceeding these limits are written to a user-readable temporary file (0600 permissions) and the path is returned to the model.
 
 ## License
 

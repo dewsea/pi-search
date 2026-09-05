@@ -1,11 +1,11 @@
 {
   "name": "@hyav/pi-search",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hyav/pi-search.git"
   },
-  "description": "LLM-driven web search and content extraction extension for Pi — built-in Tavily, AnySearch, and Jina providers.",
+  "description": "Web search and content extraction extension for Pi with explicit multi-provider tools, interactive credential management, and 9 built-in providers",
   "type": "module",
   "main": "./index.ts",
   "keywords": [
@@ -15,7 +15,13 @@
     "web-search",
     "tavily",
     "anysearch",
-    "jina"
+    "jina",
+    "exa",
+    "serper",
+    "firecrawl",
+    "brave",
+    "tinyfish",
+    "serpapi"
   ],
   "author": "hyav",
   "license": "MIT",
@@ -58,7 +64,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "tsx --import ./test/setup.ts --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "check": "biome check . && npm run typecheck",
     "audit:runtime": "npm audit --omit=dev --audit-level=high",

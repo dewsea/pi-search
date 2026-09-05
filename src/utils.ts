@@ -1,13 +1,3 @@
-import dnsPromises from "node:dns/promises";
-import type { LookupFunction } from "node:net";
-
-export const dnsClient = {
-	resolve4: (hostname: string): Promise<string[]> => dnsPromises.resolve4(hostname),
-	resolve6: (hostname: string): Promise<string[]> => dnsPromises.resolve6(hostname),
-	lookup: (hostname: string, options: { all: true }): Promise<Array<{ address: string; family: number }>> =>
-		dnsPromises.lookup(hostname, options),
-};
-
 import type { SearchResult } from "./providers/types.js";
 
 export const MAX_DIRECT_RESPONSE_BYTES = 10 * 1024 * 1024;
@@ -82,8 +72,7 @@ function parseIPv6Groups(ip: string): number[] | null {
 type IPv4Cidr = readonly [address: IPv4Address, prefixLength: number];
 
 // Deny every IPv4 range that is private, local, shared, documentation-only,
-// benchmarking, multicast, or reserved. Direct fetching is allowed only to
-// ordinary globally routable unicast addresses.
+// benchmarking, multicast, or reserved.
 const NON_PUBLIC_IPV4_CIDRS: readonly IPv4Cidr[] = [
 	[[0, 0, 0, 0], 8],
 	[[10, 0, 0, 0], 8],
@@ -155,54 +144,15 @@ export function isPrivateIP(ip: string): boolean {
 	return NON_PUBLIC_GLOBAL_UNICAST_IPV6_CIDRS.some(([base, prefixLength]) => isIPv6InCidr(ipv6, base, prefixLength));
 }
 
-const DNS_RESOLUTION_TIMEOUT_MS = 5000;
-
-async function resolveAllAddresses(hostname: string, signal?: AbortSignal): Promise<string[]> {
-	const lookupPromise = dnsClient.lookup(hostname, { all: true });
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const timeout = new Promise<never>((_resolve, reject) => {
-		timer = setTimeout(
-			() => reject(new Error(`DNS resolution timed out after ${DNS_RESOLUTION_TIMEOUT_MS}ms`)),
-			DNS_RESOLUTION_TIMEOUT_MS,
-		);
-	});
-	let removeAbortListener: (() => void) | undefined;
-	const cancellation = signal
-		? new Promise<never>((_resolve, reject) => {
-				const onAbort = () => reject(abortReason(signal));
-				if (signal.aborted) {
-					onAbort();
-					return;
-				}
-				signal.addEventListener("abort", onAbort, { once: true });
-				removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-			})
-		: undefined;
-
-	try {
-		const resolution = Promise.allSettled([
-			lookupPromise,
-			dnsClient.resolve4(hostname),
-			dnsClient.resolve6(hostname),
-		]);
-		const pending = cancellation ? [resolution, timeout, cancellation] : [resolution, timeout];
-		const results = await Promise.race(pending);
-		const addresses: string[] = [];
-		const [lookup, ipv4, ipv6] = results;
-		if (lookup.status === "fulfilled") {
-			const values = Array.isArray(lookup.value) ? lookup.value : [lookup.value];
-			addresses.push(...values.map(({ address }) => address));
-		}
-		if (ipv4.status === "fulfilled") addresses.push(...ipv4.value);
-		if (ipv6.status === "fulfilled") addresses.push(...ipv6.value);
-		return [...new Set(addresses)];
-	} finally {
-		if (timer) clearTimeout(timer);
-		removeAbortListener?.();
-	}
-}
-
-const NON_PUBLIC_HOST_SUFFIXES = [".localhost", ".local", ".internal", ".home.arpa", ".test", ".invalid", ".example"];
+export const NON_PUBLIC_HOST_SUFFIXES = [
+	".localhost",
+	".local",
+	".internal",
+	".home.arpa",
+	".test",
+	".invalid",
+	".example",
+];
 
 export function validateHttpUrl(urlStr: string): URL {
 	const url = new URL(urlStr);
@@ -217,7 +167,9 @@ export function validateHttpUrl(urlStr: string): URL {
 
 	const normalizedHostname = stripIpBrackets(hostname);
 	const isIP = parseIPv4(normalizedHostname) !== null || parseIPv6Groups(normalizedHostname) !== null;
-	if (isIP && isPrivateIP(normalizedHostname)) throw new Error(`Blocked non-public IP access: ${hostname}`);
+	if (isIP && isPrivateIP(normalizedHostname)) {
+		throw new Error(`Blocked non-public IP access: ${hostname}`);
+	}
 	if (!isIP) {
 		const canonicalHostname = normalizedHostname.toLowerCase().replace(/\.$/, "");
 		if (
@@ -229,177 +181,6 @@ export function validateHttpUrl(urlStr: string): URL {
 		}
 	}
 	return url;
-}
-
-// Resolve and classify every address before locking a direct connection to
-// one checked IP, preventing private-address access and DNS rebinding.
-export async function assertSafeDns(urlStr: string, signal?: AbortSignal): Promise<{ url: string; ip: string }> {
-	const url = validateHttpUrl(urlStr);
-	if (signal?.aborted) throw abortReason(signal);
-	const hostname = url.hostname;
-	const normalizedHostname = stripIpBrackets(hostname);
-	const isIP = parseIPv4(normalizedHostname) !== null || parseIPv6Groups(normalizedHostname) !== null;
-	if (isIP) return { url: urlStr, ip: normalizedHostname };
-
-	const addresses = await resolveAllAddresses(hostname, signal);
-	if (addresses.length === 0) throw new Error(`DNS resolution failed for ${hostname}`);
-	for (const address of addresses) {
-		if (isPrivateIP(address)) {
-			throw new Error(`SSRF Blocked: Resolving to non-public address: ${address}`);
-		}
-	}
-
-	return { url: urlStr, ip: addresses[0] };
-}
-
-interface CacheEntry<T> {
-	value: T;
-	expiresAt: number;
-}
-
-export class SafeMemoryCache<T> {
-	private cache = new Map<string, CacheEntry<T>>();
-	constructor(
-		private ttlMs: number = 300000,
-		private maxEntries: number = 100,
-	) {}
-
-	get(key: string): T | null {
-		const entry = this.cache.get(key);
-		if (!entry) return null;
-		if (Date.now() > entry.expiresAt) {
-			this.cache.delete(key);
-			return null;
-		}
-		return entry.value;
-	}
-
-	set(key: string, value: T): void {
-		if (this.cache.size >= this.maxEntries) {
-			// FIFO cache eviction
-			const firstKey = this.cache.keys().next().value;
-			if (firstKey) this.cache.delete(firstKey);
-		}
-		this.cache.set(key, {
-			value,
-			expiresAt: Date.now() + this.ttlMs,
-		});
-	}
-
-	clear(): void {
-		this.cache.clear();
-	}
-}
-
-import http from "node:http";
-import https from "node:https";
-
-// Native fetch replacement enforcing pinned IP against DNS rebinding while preserving HTTPS validation
-export function safeFetch(urlStr: string, safeIp: string, options: RequestInit = {}): Promise<Response> {
-	const url = new URL(urlStr);
-	if (url.protocol !== "http:" && url.protocol !== "https:") {
-		return Promise.reject(new Error(`Unsupported URL protocol: ${url.protocol}`));
-	}
-	const isHttps = url.protocol === "https:";
-	const lib = isHttps ? https : http;
-
-	const headers: Record<string, string> = {};
-	if (options.headers) {
-		if (options.headers instanceof Headers) {
-			options.headers.forEach((val, key) => {
-				headers[key] = val;
-			});
-		} else if (Array.isArray(options.headers)) {
-			for (const [key, val] of options.headers) {
-				headers[key] = val;
-			}
-		} else {
-			Object.assign(headers, options.headers);
-		}
-	}
-
-	// Custom lookup enforcing the connection to the validated safe IP
-	const customLookup: LookupFunction = (_hostname, opts, callback) => {
-		const family = safeIp.includes(":") ? 6 : 4;
-		if (opts?.all) {
-			callback(null, [{ address: safeIp, family }]);
-		} else {
-			callback(null, safeIp, family);
-		}
-	};
-
-	const reqOptions: http.RequestOptions = {
-		method: options.method || "GET",
-		headers,
-		lookup: customLookup,
-		signal: options.signal ?? undefined,
-	};
-
-	return new Promise<Response>((resolve, reject) => {
-		let settled = false;
-		const fail = (err: Error) => {
-			if (settled) return;
-			settled = true;
-			reject(err);
-		};
-		const req = lib.request(urlStr, reqOptions, (res) => {
-			const declaredLength = Number(res.headers["content-length"]);
-			if (Number.isFinite(declaredLength) && declaredLength > MAX_DIRECT_RESPONSE_BYTES) {
-				const err = new Error(`PAYLOAD_TOO_LARGE: response exceeds ${MAX_DIRECT_RESPONSE_BYTES} bytes`);
-				res.destroy(err);
-				req.destroy(err);
-				fail(err);
-				return;
-			}
-
-			const chunks: Buffer[] = [];
-			let totalBytes = 0;
-			res.on("data", (chunk: Buffer | Uint8Array | string) => {
-				if (settled) return;
-				const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-				totalBytes += buffer.byteLength;
-				if (totalBytes > MAX_DIRECT_RESPONSE_BYTES) {
-					const err = new Error(`PAYLOAD_TOO_LARGE: response exceeds ${MAX_DIRECT_RESPONSE_BYTES} bytes`);
-					res.destroy(err);
-					req.destroy(err);
-					fail(err);
-					return;
-				}
-				chunks.push(buffer);
-			});
-			res.on("error", fail);
-			res.on("end", () => {
-				if (settled) return;
-				settled = true;
-				const responseHeaders = new Headers();
-				for (const [key, val] of Object.entries(res.headers)) {
-					if (Array.isArray(val)) {
-						for (const v of val) responseHeaders.append(key, v);
-					} else if (val !== undefined) {
-						responseHeaders.set(key, val);
-					}
-				}
-				const response = new Response(Buffer.concat(chunks, totalBytes), {
-					status: res.statusCode,
-					statusText: res.statusMessage,
-					headers: responseHeaders,
-				});
-				Object.defineProperty(response, "url", { value: urlStr });
-				resolve(response);
-			});
-		});
-
-		req.on("error", fail);
-
-		if (options.body) {
-			if (typeof options.body === "string" || Buffer.isBuffer(options.body)) {
-				req.write(options.body);
-			} else {
-				req.write(String(options.body));
-			}
-		}
-		req.end();
-	});
 }
 
 async function bufferResponseWithLimit(response: Response, maxResponseBytes: number): Promise<Response> {
@@ -435,13 +216,18 @@ async function bufferResponseWithLimit(response: Response, maxResponseBytes: num
 	return buffered;
 }
 
-// Bound the complete request, including response-body reads, and return a
-// replayable buffered Response so callers cannot accidentally bypass limits.
+function abortReason(signal: AbortSignal): Error {
+	return signal.reason instanceof Error ? signal.reason : new Error("Network request aborted");
+}
+
+/**
+ * Bound network requests by timeout and total response byte size, returning
+ * a fully buffered Response.
+ */
 export async function fetchWithTimeout(
 	url: string,
 	options: RequestInit = {},
 	timeoutMs: number = DEFAULT_PROVIDER_TIMEOUT_MS,
-	safeIp?: string,
 	maxResponseBytes: number = MAX_DIRECT_RESPONSE_BYTES,
 ): Promise<Response> {
 	const timeoutController = new AbortController();
@@ -453,9 +239,11 @@ export async function fetchWithTimeout(
 		timeoutController.abort(new Error("timeout"));
 		timeoutReject?.(new Error(`Network request timed out after ${timeoutMs}ms`));
 	}, timeoutMs);
+
 	const signal = options.signal
 		? AbortSignal.any([options.signal, timeoutController.signal])
 		: timeoutController.signal;
+
 	let removeCallerAbortListener: (() => void) | undefined;
 	const callerSignal = options.signal;
 	const callerAbortPromise = callerSignal
@@ -469,13 +257,14 @@ export async function fetchWithTimeout(
 				removeCallerAbortListener = () => callerSignal.removeEventListener("abort", onAbort);
 			})
 		: undefined;
+
 	try {
 		const request = (async () => {
-			const response = safeIp
-				? await safeFetch(url, safeIp, { ...options, signal })
-				: await fetch(url, { ...options, signal });
+			const response = await fetch(url, { ...options, signal });
 			return bufferResponseWithLimit(response, maxResponseBytes);
 		})();
+		// Attach catch handler to avoid unhandledRejection if abort/timeout wins the race
+		request.catch(() => {});
 		const pending = callerAbortPromise ? [request, timeoutPromise, callerAbortPromise] : [request, timeoutPromise];
 		return await Promise.race(pending);
 	} catch (err) {
@@ -487,144 +276,4 @@ export async function fetchWithTimeout(
 		clearTimeout(timer);
 		removeCallerAbortListener?.();
 	}
-}
-
-function abortReason(signal: AbortSignal): Error {
-	return signal.reason instanceof Error ? signal.reason : new Error("Network request aborted");
-}
-
-async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
-	if (signal?.aborted) throw abortReason(signal);
-	await new Promise<void>((resolve, reject) => {
-		let timer: ReturnType<typeof setTimeout>;
-		const onAbort = () => {
-			clearTimeout(timer);
-			signal?.removeEventListener("abort", onAbort);
-			reject(signal ? abortReason(signal) : new Error("Network request aborted"));
-		};
-		timer = setTimeout(() => {
-			signal?.removeEventListener("abort", onAbort);
-			resolve();
-		}, delayMs);
-		signal?.addEventListener("abort", onAbort, { once: true });
-	});
-}
-
-// Limited retry for HTTP 429 and transient transport failures; caller cancellation and payload limits do not retry.
-export async function fetchWithRetry(
-	url: string,
-	options: RequestInit = {},
-	maxRetries: number = 1,
-	safeIp?: string,
-): Promise<Response> {
-	let lastError: Error | null = null;
-	for (let attempt = 0; attempt <= maxRetries; attempt++) {
-		try {
-			if (options.signal?.aborted) throw abortReason(options.signal);
-			if (attempt > 0) {
-				const backoff = 1000 * 2 ** attempt + Math.random() * 200;
-				await waitForRetry(backoff, options.signal ?? undefined);
-			}
-			const res = await fetchWithTimeout(url, options, 8000, safeIp);
-			if (res.status === 429 && attempt < maxRetries) {
-				continue;
-			}
-			return res;
-		} catch (err) {
-			lastError = err instanceof Error ? err : new Error(String(err));
-			if (options.signal?.aborted) throw abortReason(options.signal);
-			if (lastError.message.startsWith("PAYLOAD_TOO_LARGE") || attempt === maxRetries) break;
-		}
-	}
-	throw lastError ?? new Error(`Request failed`);
-}
-
-/**
- * High-performance, ReDoS-safe HTML-to-Markdown extractor.
- * Automatically applies chunk truncation and plaintext degradation for pages >200KB to protect the main thread.
- */
-export function cleanHtmlToMarkdown(html: string): string {
-	if (!html) return "";
-
-	let text = html;
-	const threshold = 200000; // 200KB
-
-	// If size exceeds threshold, perform coarse string truncation before regex parsing
-	if (text.length > threshold) {
-		// Prefer extracting content within <main>, <article>, or <body>
-		for (const tag of ["main", "article", "body"]) {
-			const startTag = `<${tag}`;
-			const endTag = `</${tag}>`;
-			const startIdx = text.indexOf(startTag);
-			if (startIdx !== -1) {
-				const endIdx = text.indexOf(endTag, startIdx);
-				if (endIdx !== -1) {
-					text = text.substring(startIdx, endIdx + endTag.length);
-					break;
-				}
-			}
-		}
-	}
-
-	// Linear fallback if content still exceeds threshold without running backtracking regexes
-	if (text.length > threshold) {
-		return text
-			.replace(/<(script|style|noscript|svg|iframe|head)[^>]*>([\s\S]*?)<\/\1>/gi, "")
-			.replace(/<[^>]+>/g, " ")
-			.replace(/\s+/g, " ")
-			.trim();
-	}
-
-	// Lightweight markdown transformation within safe byte budget
-	text = text.replace(/<(script|style|noscript|svg|iframe|head)[^>]*>([\s\S]*?)<\/\1>/gi, "");
-	text = text.replace(/<!--[\s\S]*?-->/g, "");
-
-	// Strip semantic headers, footers, navs, and asides
-	text = text.replace(/<(header|footer|nav|aside)[^>]*>([\s\S]*?)<\/\1>/gi, "");
-
-	// Strip ads, navigation, and sidebar containers by attribute
-	text = text.replace(
-		/<[^>]+(id|class)="[^"]*(sidebar|footer|nav|header|ad-|banner|menu)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/gi,
-		"",
-	);
-
-	// Headings
-	text = text.replace(
-		/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi,
-		(_, content) => `\n\n# ${content.replace(/<[^>]+>/g, "").trim()}\n`,
-	);
-
-	// Hyperlinks
-	text = text.replace(/<a[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href, innerText) => {
-		const cleanText = innerText.replace(/<[^>]+>/g, "").trim();
-		return cleanText ? ` [${cleanText}](${href}) ` : "";
-	});
-
-	// Code blocks
-	text = text.replace(/<pre[^>]*>[\s\S]*?<code[^>]*>([\s\S]*?)<\/code>[\s\S]*?<\/pre>/gi, (_, code) => {
-		const cleanCode = code.replace(/<[^>]+>/g, "");
-		return `\n\`\`\`\n${cleanCode}\n\`\`\`\n`;
-	});
-
-	// Images
-	text = text.replace(/<img([^>]+)>/gi, (_, attrs) => {
-		const srcMatch = attrs.match(/src="([^"]*)"/i);
-		const altMatch = attrs.match(/alt="([^"]*)"/i);
-		const src = srcMatch ? srcMatch[1] : "";
-		const alt = altMatch ? altMatch[1] : "";
-		return src ? ` ![${alt}](${src}) ` : "";
-	});
-
-	// Paragraphs and breaks
-	text = text.replace(/<p[^>]*>/gi, "\n\n").replace(/<\/p>/gi, "");
-	text = text.replace(/<br\s*\/?>/gi, "\n");
-
-	// Strip remaining HTML tags
-	text = text.replace(/<[^>]+>/g, " ");
-
-	// Collapse whitespace
-	text = text.replace(/[ \t]+/g, " ");
-	text = text.replace(/\n\s*\n/g, "\n\n");
-
-	return text.trim();
 }

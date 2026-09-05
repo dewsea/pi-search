@@ -4,9 +4,20 @@ This file is the authoritative user-facing release history for `@hyav/pi-search`
 
 ## Unreleased
 
-- Clarified `web_search` and `web_fetch` guidance to omit `provider` by default so automatic fallback remains active; explicit provider selection remains strict.
-- Made `research=true` use Tavily for both its research report and supporting search sources, reject incompatible vertical searches, avoid caching inconclusive empty results, and honor `config.defaults.max_results` when `max_results` is omitted.
-- Fixed `web_search` and `web_fetch` exceeding their output limits after adding headers or truncation notices; complete responses now stay within 2,000 lines and 50 KiB, while temporary files preserve the full search output or unmodified fetched content.
+## 0.2.0 - 2026-09-05
+
+- **Breaking**: Renamed model-facing tools from `web_search` and `web_fetch` to `search` and `fetch`, requiring explicit `providers: string[]` selection; individual `provider` argument is normalized to an array for backwards compatibility.
+- **Breaking**: Replaced complex multi-tier capabilities and factory functions with a unified `Provider` contract directly implementing `search(query, maxResults, ctx)` and `fetch(url, ctx)`.
+- **Breaking**: Removed deprecated features: `queries` multi-query planning, `research` deep research, `vertical` search, `raw` extraction, fallback chains, direct local fetching, and business cache.
+- Fixed AnySearch content extraction response parsing to read `data.content` and `data.title` from structured envelopes, resolving empty content extraction errors.
+- Fixed Firecrawl search and scrape integration for the current v2 response envelopes.
+- Added interactive `/search` command to inspect provider status, set API keys, and clear stored credentials with atomic file updates and live tool definition refreshes.
+- Simplified `/search` menus with compact provider names, separately styled credential status, and Escape cancellation without extra Cancel entries; the TUI picker follows Pi's searchable selector pattern with fuzzy filtering and input focus handling.
+- Added 9 built-in search and fetch providers: Tavily, AnySearch, Jina, Exa, Serper, Firecrawl, Brave, TinyFish, and SerpApi.
+- Implemented multi-provider concurrent execution (up to 3 providers) preserving input order, with partial failure aggregation and 30-second per-provider timeouts.
+- Standardized credential resolution priority to `stored > env > keyless`, storing local credentials in `<agent-dir>/extensions/pi-search/config.json` with 0600 file permissions.
+- Bounded complete tool output strictly to 2,000 lines or 50 KiB, persisting oversized results to temporary files with paths reported in responses.
+- Fixed the package root entry point to export the documented custom provider adapter API.
 
 ## 0.1.3 - 2026-08-24
 
