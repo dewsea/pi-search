@@ -1,17 +1,12 @@
 import {
 	defineProvider,
 	type Provider,
-	type ProviderMeta,
+	type ProviderContext,
 	type SearchResponse,
 	type SearchResult,
 } from "@hyav/pi-search";
 
 const SEARCH_ENDPOINT = "https://open.feedcoopapi.com/search_api/web_search";
-
-function withTimeout(signal: AbortSignal | undefined, timeoutMs = 30_000): AbortSignal {
-	const timeoutSignal = AbortSignal.timeout(timeoutMs);
-	return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-}
 
 interface DoubaoError {
 	Code?: string;
@@ -77,43 +72,24 @@ function normalizeResults(raw: DoubaoWebResult[], maxResults: number): SearchRes
 		});
 }
 
-export const DOUBAO_META = {
+export const doubaoProvider: Provider = {
 	name: "doubao",
 	label: "Doubao Search",
 	envVar: "DOUBAO_SEARCH_API_KEY",
-	capabilities: {
-		generalSearch: true,
-		verticalSearch: false,
-		contentExtraction: false,
-		crawl: false,
-		siteMap: false,
-		deepResearch: false,
-		batchSearch: false,
-		hasMetadata: true,
-	},
 	searchHint:
-		"Volcengine Doubao Search is optimized for Chinese-language web search, current Chinese news, domestic websites, and ByteDance ecosystem sources. Results include publish times, source authority metadata, and relevance scores.",
-	searchFallbackPriority: 27,
-} as const satisfies ProviderMeta;
+		"Volcengine Doubao Search is optimized for Chinese-language web search, current Chinese news, domestic websites, and ByteDance ecosystem sources.",
 
-export class DoubaoProvider implements Provider {
-	readonly name = DOUBAO_META.name;
-	readonly label = DOUBAO_META.label;
-	readonly capabilities = DOUBAO_META.capabilities;
+	async search(query: string, maxResults: number, ctx: ProviderContext): Promise<SearchResponse> {
+		if (!ctx.apiKey) throw new Error("Doubao Search requires an API key");
 
-	constructor(private readonly apiKey: string) {
-		if (!apiKey) throw new Error("Doubao Search requires an API key");
-	}
-
-	async search(query: string, maxResults: number, signal?: AbortSignal): Promise<SearchResponse> {
 		const normalizedQuery = query.trim();
 		if (!normalizedQuery) return { results: [] };
 
-		const res = await fetch(SEARCH_ENDPOINT, {
+		const res = await ctx.request(SEARCH_ENDPOINT, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
-				Authorization: `Bearer ${this.apiKey}`,
+				Authorization: `Bearer ${ctx.apiKey}`,
 			},
 			body: JSON.stringify({
 				Query: normalizedQuery.slice(0, 100),
@@ -124,7 +100,6 @@ export class DoubaoProvider implements Provider {
 					NeedUrl: true,
 				},
 			}),
-			signal: withTimeout(signal),
 		});
 
 		if (!res.ok) {
@@ -142,14 +117,7 @@ export class DoubaoProvider implements Provider {
 		return {
 			results: normalizeResults(data.Result?.WebResults ?? [], maxResults),
 		};
-	}
-}
-
-export default defineProvider({
-	...DOUBAO_META,
-	apiKeyRequired: true,
-	create: ({ apiKey }) => {
-		if (!apiKey) throw new Error("Doubao Search requires an API key");
-		return new DoubaoProvider(apiKey);
 	},
-});
+};
+
+export default defineProvider(doubaoProvider);

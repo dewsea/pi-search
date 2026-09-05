@@ -1,135 +1,84 @@
 // Provider registry — built-in adapters register statically at module load;
 // user adapters are discovered later from
 // <agent dir>/extensions/pi-search/providers/ by src/adapter-loader.ts and may
-// override built-ins by name. Built-in provider files (src/providers/*.ts)
-// are reference templates for custom adapters.
+// override built-ins by name.
 
-import { getProviderFactory, getProviderRegistry, registerProvider } from "../adapter-api.js";
+import { getProviderRegistry, registerProvider } from "../adapter-api.js";
+import { resolveProviderCredential, type SearchConfig } from "../config.js";
 import anysearchAdapter from "./anysearch.js";
+import braveAdapter from "./brave.js";
+import exaAdapter from "./exa.js";
+import firecrawlAdapter from "./firecrawl.js";
 import jinaAdapter from "./jina.js";
+import serpapiAdapter from "./serpapi.js";
+import serperAdapter from "./serper.js";
 import tavilyAdapter from "./tavily.js";
-import type { Provider, ProviderMeta } from "./types.js";
+import tinyfishAdapter from "./tinyfish.js";
+import type { Provider } from "./types.js";
 
+// Register all 9 built-in providers statically
+registerProvider(tavilyAdapter, "builtin");
 registerProvider(anysearchAdapter, "builtin");
 registerProvider(jinaAdapter, "builtin");
-registerProvider(tavilyAdapter, "builtin");
+registerProvider(exaAdapter, "builtin");
+registerProvider(serperAdapter, "builtin");
+registerProvider(firecrawlAdapter, "builtin");
+registerProvider(braveAdapter, "builtin");
+registerProvider(tinyfishAdapter, "builtin");
+registerProvider(serpapiAdapter, "builtin");
 
-export const PROVIDERS: readonly ProviderMeta[] = getProviderRegistry();
+export const PROVIDERS: readonly Provider[] = getProviderRegistry();
 
-export function searchProviderNames(): string[] {
-	return PROVIDERS.filter((p) => p.capabilities.generalSearch).map((p) => p.name);
+export function getCandidateSearchProviders(config: SearchConfig, env: NodeJS.ProcessEnv = process.env): Provider[] {
+	return getProviderRegistry().filter((p) => {
+		if (typeof p.search !== "function") return false;
+		const cred = resolveProviderCredential(p, config, env);
+		return cred.status !== "unconfigured";
+	});
 }
 
-export function fetchProviderNames(): string[] {
-	return PROVIDERS.filter((p) => p.capabilities.contentExtraction).map((p) => p.name);
+export function getCandidateFetchProviders(config: SearchConfig, env: NodeJS.ProcessEnv = process.env): Provider[] {
+	return getProviderRegistry().filter((p) => {
+		if (typeof p.fetch !== "function") return false;
+		const cred = resolveProviderCredential(p, config, env);
+		return cred.status !== "unconfigured";
+	});
 }
 
-export function allVerticals(): string[] {
-	return PROVIDERS.flatMap((p) => p.verticals ?? []);
-}
-
-export function buildSearchChain(): string[] {
-	return PROVIDERS.filter((p) => p.capabilities.generalSearch && p.searchFallbackPriority !== undefined)
-		.sort((a, b) => a.searchFallbackPriority! - b.searchFallbackPriority!)
-		.map((p) => p.name);
-}
-
-export function buildFetchChain(): string[] {
-	return PROVIDERS.filter((p) => p.capabilities.contentExtraction && p.fetchFallbackPriority !== undefined)
-		.sort((a, b) => a.fetchFallbackPriority! - b.fetchFallbackPriority!)
-		.map((p) => p.name);
-}
-
-export function searchPromptGuidelines(): string[] {
+export function searchPromptGuidelines(candidates: readonly Provider[]): string[] {
 	const lines: string[] = [
-		"Use web_search for information beyond your training data — current events, recent docs, live data, academic papers, stock prices, CVEs.",
-		"For web_search, choose a provider based on the query domain.",
+		"For search, specify providers: string[] explicitly naming one or more providers from the available list.",
+		"For search, choose a single suitable provider for ordinary search tasks. Select multiple providers when comparison, broader coverage, or cross-verification is needed.",
+		"For search, select providers based on their capabilities and result characteristics; no single provider is best for all tasks.",
+		"For search, note that Serper and SerpApi both use Google Search and should not be treated as independent search indexes.",
+		"For search, each result preserves its provider source. When answering, cite sources with markdown hyperlinks: [Title](URL).",
 	];
 
-	for (const meta of PROVIDERS) {
-		if (meta.searchHint) {
-			lines.push(`For web_search, ${meta.label} (provider='${meta.name}'): ${meta.searchHint}`);
+	for (const p of candidates) {
+		if (p.searchHint) {
+			lines.push(`For search, ${p.label} (providers: ["${p.name}"]): ${p.searchHint}`);
 		}
 	}
-
-	const verts = allVerticals();
-	const verticalProviders = PROVIDERS.filter((p) => p.capabilities.verticalSearch && p.verticals?.length);
-	if (verticalProviders.length > 0 && verts.length > 0) {
-		lines.push("For structured vertical data in web_search, select a vertical-capable provider and pass a vertical.");
-		for (const p of verticalProviders) {
-			lines.push(
-				`For web_search, ${p.label} supports these verticals: ${p.verticals!.map((v) => `'${v}'`).join(", ")}.`,
-			);
-		}
-		lines.push("Example for web_search: provider='anysearch' + vertical='finance.us_stock' for a stock price query.");
-	}
-
-	lines.push(
-		"If unsure which provider fits, omit provider in web_search — it uses a cost-priority fallback chain (general-purpose first).",
-		'After answering with web_search, include a "Sources:" section with markdown hyperlinks: [Title](URL).',
-		"Use web_fetch after web_search to read full page content — web_search returns snippets only.",
-		"Use {queries:[...]} with 2-4 varied angles in web_search for broader coverage — each query routes independently.",
-	);
 
 	return lines;
 }
 
-export function fetchPromptGuidelines(): string[] {
+export function fetchPromptGuidelines(candidates: readonly Provider[]): string[] {
 	const lines: string[] = [
-		"Use web_fetch to read the full content of a URL — use it after web_search when a snippet is too short.",
-		"For web_fetch, choose a provider based on the page type.",
+		"For fetch, specify providers: string[] explicitly naming one or more providers from the available list.",
+		"For fetch, choose a single suitable provider for ordinary extraction tasks. Select multiple providers when comparing extraction quality or ensuring completeness.",
+		"For fetch, use fetch to read the full content of relevant URLs identified during search.",
 	];
 
-	for (const meta of PROVIDERS) {
-		if (meta.fetchHint) {
-			lines.push(`For web_fetch, ${meta.label} (provider='${meta.name}'): ${meta.fetchHint}`);
+	for (const p of candidates) {
+		if (p.fetchHint) {
+			lines.push(`For fetch, ${p.label} (providers: ["${p.name}"]): ${p.fetchHint}`);
 		}
 	}
 
 	lines.push(
-		"If unsure which provider fits, omit provider in web_fetch — it uses a cost-priority fallback chain (fast/free first, heavy JS-rendering last).",
-		'After reading content with web_fetch, include a "Sources:" section with markdown hyperlinks to the fetched URLs.',
-		"Large web_fetch results are truncated — the full-output path is reported in the result, so use the read tool to access it.",
+		"For fetch, large results are truncated — the full-output path is reported in the result, so use the read tool to access it.",
 	);
 
 	return lines;
-}
-
-export interface ProviderOptions {
-	apiKey: string | undefined;
-}
-
-export function createProvider(name: string, opts: ProviderOptions): Provider {
-	const meta = PROVIDERS.find((p) => p.name === name);
-	if (!meta) {
-		throw new Error(`Unknown provider: "${name}". Available: ${PROVIDERS.map((p) => p.name).join(", ")}`);
-	}
-
-	const keyRequired = meta.apiKeyRequired ?? true;
-	if (keyRequired && !opts.apiKey) {
-		throw new Error(`${meta.label} requires an API key`);
-	}
-
-	const factory = getProviderFactory(name);
-	if (!factory) {
-		throw new Error(`Implementation factory for provider "${name}" not found`);
-	}
-
-	return factory(opts);
-}
-
-export function createAvailableProviders(apiKeys: Record<string, string | undefined>): Map<string, Provider> {
-	const providers = new Map<string, Provider>();
-	for (const meta of PROVIDERS) {
-		const key = apiKeys[meta.name];
-		const keyRequired = meta.apiKeyRequired ?? true;
-		if (!key && keyRequired) continue;
-		try {
-			providers.set(meta.name, createProvider(meta.name, { apiKey: key }));
-		} catch (err) {
-			console.error(`Failed to initialize provider "${meta.name}":`, err instanceof Error ? err.message : err);
-			// skip providers that fail to initialize
-		}
-	}
-	return providers;
 }

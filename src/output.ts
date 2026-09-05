@@ -12,13 +12,17 @@ import {
 
 const OUTPUT_TEMP_PREFIX = "pisearch-output-";
 
-export interface LimitedSearchOutput {
+export interface LimitedToolOutput {
 	text: string;
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
 }
 
-export async function limitSearchOutput(content: string, signal?: AbortSignal): Promise<LimitedSearchOutput> {
+export async function limitToolOutput(
+	content: string,
+	signal?: AbortSignal,
+	fileContent = content,
+): Promise<LimitedToolOutput> {
 	signal?.throwIfAborted();
 	const truncation = truncateHead(content, {
 		maxLines: DEFAULT_MAX_LINES,
@@ -31,17 +35,20 @@ export async function limitSearchOutput(content: string, signal?: AbortSignal): 
 	await withFileMutationQueue(fullOutputPath, async () => {
 		signal?.throwIfAborted();
 		try {
-			await writeFile(fullOutputPath, content, { encoding: "utf8", mode: 0o600, signal });
+			await writeFile(fullOutputPath, fileContent, { encoding: "utf8", mode: 0o600, signal });
 		} catch (error) {
 			signal?.throwIfAborted();
 			throw error;
 		}
 	});
 	signal?.throwIfAborted();
-	const text =
-		truncation.content +
-		`\n\n[Truncated: ${truncation.outputLines}/${truncation.totalLines} lines` +
-		` (${formatSize(truncation.outputBytes)}/${formatSize(truncation.totalBytes)}).` +
+	const footer =
+		`\n\n[Truncated: ${truncation.totalLines} total lines (${formatSize(truncation.totalBytes)}).` +
 		` Full output: ${fullOutputPath}]`;
-	return { text, truncation, fullOutputPath };
+	// The notice and its complete file path must fit inside the same output budget.
+	const preview = truncateHead(content, {
+		maxLines: DEFAULT_MAX_LINES - (footer.split("\n").length - 1),
+		maxBytes: DEFAULT_MAX_BYTES - Buffer.byteLength(footer, "utf8"),
+	});
+	return { text: preview.content + footer, truncation: preview, fullOutputPath };
 }

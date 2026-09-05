@@ -10,11 +10,8 @@ They intentionally live outside `src/providers/`, so installing the package does
 |---|---|---|---|
 | DeepSeek | Search | `DEEPSEEK_API_KEY` | `DEEPSEEK_SEARCH_MODEL` |
 | Doubao Search | Search | `DOUBAO_SEARCH_API_KEY` | — |
-| Exa | Search, extraction | `EXA_API_KEY` | — |
-| Firecrawl | Extraction | `FIRECRAWL_API_KEY` | — |
 | Gemini | Search | `GEMINI_API_KEY` | `GEMINI_SEARCH_MODEL` |
 | iFlow | Search, extraction | `IFLOW_API_KEY` | — |
-| Serper | Search | `SERPER_API_KEY` | — |
 
 ## Install as user adapters
 
@@ -26,11 +23,8 @@ Copy any adapters you want into the resolved Pi agent directory:
   providers/
     deepseek.ts
     doubao.ts
-    exa.ts
-    firecrawl.ts
     gemini.ts
     iflow.ts
-    serper.ts
 ```
 
 For example:
@@ -38,8 +32,8 @@ For example:
 ```sh
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 mkdir -p "$agent_dir/extensions/pi-search/providers"
-cp examples/search-providers/providers/exa.ts \
-  "$agent_dir/extensions/pi-search/providers/exa.ts"
+cp examples/search-providers/providers/deepseek.ts \
+  "$agent_dir/extensions/pi-search/providers/deepseek.ts"
 ```
 
 If `PI_CODING_AGENT_DIR` is unset, Pi normally resolves the agent directory as `~/.pi/agent`.
@@ -49,15 +43,15 @@ Provide credentials through the environment variables above, or through `<agent-
 ```json
 {
   "apiKeys": {
-    "doubao": "...",
-    "exa": "..."
+    "deepseek": "...",
+    "doubao": "..."
   }
 }
 ```
 
-Environment variables take precedence. Keep credential files readable only by your user and never commit keys. Restart Pi after changing inherited environment variables, or update `config.json`, then run `/reload` so the adapter files and tool schemas are rediscovered.
+Credentials resolve in the standardized priority `stored > env > keyless`. Stored configuration in `config.json` takes precedence over environment variables. Keep credential files readable only by your user and never commit keys. Restart Pi after changing inherited environment variables, or update `config.json`, then run `/reload` so the adapter files and tool schemas are rediscovered.
 
-The provider names used by `web_search` or `web_fetch` are `deepseek`, `doubao`, `exa`, `firecrawl`, `gemini`, `iflow`, and `serper`.
+The provider names used by `search` or `fetch` are `deepseek`, `doubao`, `gemini`, and `iflow`.
 
 ## Scope and security
 

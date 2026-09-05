@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { loadUserAdapters, resolveUserAdapterRoot } from "../src/adapter-loader.js";
-import { createProvider, PROVIDERS } from "../src/providers/index.js";
+import { PROVIDERS } from "../src/providers/index.js";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -16,36 +16,10 @@ function writeAdapterBody(providerName: string, label: string): string {
 		`	name: ${JSON.stringify(providerName)},`,
 		`	label: ${JSON.stringify(label)},`,
 		`	envVar: "CUSTOM_API_KEY",`,
-		`	capabilities: {`,
-		`		generalSearch: true,`,
-		`		verticalSearch: false,`,
-		`		contentExtraction: true,`,
-		`		crawl: false,`,
-		`		siteMap: false,`,
-		`		deepResearch: false,`,
-		`		batchSearch: false,`,
-		`		hasMetadata: false,`,
-		`	},`,
 		`	searchHint: "Test search hint",`,
 		`	fetchHint: "Test fetch hint",`,
-		`	searchFallbackPriority: 5,`,
-		`	fetchFallbackPriority: 5,`,
-		`	apiKeyRequired: false,`,
-		`	create: ({ apiKey }) => ({`,
-		`		name: ${JSON.stringify(providerName)},`,
-		`		label: ${JSON.stringify(label)},`,
-		`		capabilities: {`,
-		`			generalSearch: true,`,
-		`			verticalSearch: false,`,
-		`			contentExtraction: true,`,
-		`			crawl: false,`,
-		`			siteMap: false,`,
-		`			deepResearch: false,`,
-		`			batchSearch: false,`,
-		`			hasMetadata: false,`,
-		`		},`,
-		`		async search() { return { results: [] }; },`,
-		`	}),`,
+		`	async search(query, maxResults, ctx) { return { results: [] }; },`,
+		`	async fetch(url, ctx) { return { title: "Test", text: "body" }; },`,
 		`});`,
 	].join("\n");
 }
@@ -85,10 +59,7 @@ describe("loadUserAdapters", () => {
 			const meta = PROVIDERS.find((m) => m.name === "custom-test");
 			assert.ok(meta, "custom adapter should be registered");
 			assert.strictEqual(meta.label, "Custom Test");
-
-			const provider = createProvider("custom-test", { apiKey: undefined });
-			assert.strictEqual(provider.name, "custom-test");
-			assert.strictEqual(typeof provider.search, "function");
+			assert.strictEqual(typeof meta.search, "function");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -137,8 +108,6 @@ describe("loadUserAdapters", () => {
 			const meta = PROVIDERS.find((m) => m.name === "tavily");
 			assert.ok(meta);
 			assert.strictEqual(meta.label, "Custom Tavily Override");
-			const provider = createProvider("tavily", { apiKey: undefined });
-			assert.strictEqual(provider.label, "Custom Tavily Override");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -157,7 +126,6 @@ describe("loadUserAdapters", () => {
 				!PROVIDERS.some((m) => m.name === "custom-test-4"),
 				"deleted user adapter must disappear after reload",
 			);
-			assert.throws(() => createProvider("custom-test-4", { apiKey: undefined }));
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -175,7 +143,6 @@ describe("loadUserAdapters", () => {
 			const meta = PROVIDERS.find((m) => m.name === "tavily");
 			assert.ok(meta);
 			assert.strictEqual(meta.label, "Tavily", "built-in registration must be restored");
-			assert.strictEqual(createProvider("tavily", { apiKey: undefined }).label, "Tavily");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

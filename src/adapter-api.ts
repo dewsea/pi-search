@@ -12,147 +12,115 @@
 //     name: "my-provider",
 //     label: "My Provider",
 //     envVar: "MY_PROVIDER_API_KEY",
-//     capabilities: { generalSearch: true, verticalSearch: false, /* ... */ },
 //     searchHint: "...",
 //     fetchHint: "...",
-//     searchFallbackPriority: 20,
-//     fetchFallbackPriority: 20,
-//     apiKeyRequired: false,
-//     create: ({ apiKey }) => new MyProvider(apiKey),
+//     async search(query, maxResults, ctx) { ... },
+//     async fetch(url, ctx) { ... },
 //   });
 
 import type { TUnsafe } from "typebox";
-import type { Provider, ProviderMeta } from "./providers/types.js";
+import type { Provider } from "./providers/types.js";
 
 export type {
-	CrawlResult,
 	FetchResponse,
 	Provider,
-	ProviderCapabilities,
-	ProviderMeta,
+	ProviderAdapter,
+	ProviderContext,
 	SearchResponse,
 	SearchResult,
 } from "./providers/types.js";
 
-/** A provider adapter: metadata plus a factory that creates the runtime instance. */
-export interface ProviderAdapter extends ProviderMeta {
-	create(opts: { apiKey: string | undefined }): Provider;
-}
-
-const PROVIDERS_MUTABLE: ProviderMeta[] = [];
-const PROVIDER_FACTORIES = new Map<string, (opts: { apiKey: string | undefined }) => Provider>();
+const PROVIDERS_MUTABLE: Provider[] = [];
 /** Registration source per provider name; only user registrations can be unregistered. */
 const PROVIDER_SOURCES = new Map<string, "builtin" | "user">();
 /** Built-in adapters, retained so unregistering a user override restores them. */
-const BUILTIN_PROVIDERS = new Map<string, ProviderAdapter>();
-
-const CAPABILITY_KEYS = [
-	"generalSearch",
-	"verticalSearch",
-	"contentExtraction",
-	"crawl",
-	"siteMap",
-	"deepResearch",
-	"batchSearch",
-	"hasMetadata",
-] as const;
+const BUILTIN_PROVIDERS = new Map<string, Provider>();
 
 function isNonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value.trim().length > 0;
 }
 
-function safeName(adapter: ProviderAdapter): string {
-	return isNonEmptyString(adapter.name) ? adapter.name : "<unnamed>";
+function safeName(adapter: unknown): string {
+	if (
+		adapter &&
+		typeof adapter === "object" &&
+		"name" in adapter &&
+		isNonEmptyString((adapter as { name: unknown }).name)
+	) {
+		return (adapter as { name: string }).name;
+	}
+	return "<unnamed>";
 }
 
 /** Read-only view of the registered provider metadata. */
-export function getProviderRegistry(): readonly ProviderMeta[] {
+export function getProviderRegistry(): readonly Provider[] {
 	return PROVIDERS_MUTABLE;
-}
-
-/** Look up the factory for a registered provider name. */
-export function getProviderFactory(name: string): ((opts: { apiKey: string | undefined }) => Provider) | undefined {
-	return PROVIDER_FACTORIES.get(name);
 }
 
 /**
  * Validate adapter metadata consistency; throws on invalid declarations.
- * Adapters can be plain .js files, so every documented field is checked at
- * runtime: strings must be non-empty, capability flags and apiKeyRequired
- * must be booleans, and fallback priorities must be finite numbers.
+ * Adapters can be plain .js/.ts files or objects without defineProvider(),
+ * so every documented field is checked at runtime.
  */
-export function validateProviderAdapter(adapter: ProviderAdapter): void {
+export function validateProviderAdapter(adapter: unknown): asserts adapter is Provider {
 	if (!adapter || typeof adapter !== "object") {
-		throw new Error("Provider adapter must be an object");
+		throw new TypeError("Provider adapter must be an object");
 	}
-	const displayName = safeName(adapter);
-	if (!isNonEmptyString(adapter.name)) {
+
+	const raw = adapter as Record<string, unknown>;
+
+	// Check for deprecated v0.1 contract (create/capabilities)
+	if ("create" in raw || "capabilities" in raw) {
+		throw new Error(
+			`Provider adapter "${safeName(adapter)}" uses deprecated v0.1 contract (create/capabilities); please migrate to the unified Provider interface with direct search/fetch methods`,
+		);
+	}
+
+	if (!isNonEmptyString(raw.name)) {
 		throw new Error("Provider adapter name must be a non-empty string");
 	}
-	if (!isNonEmptyString(adapter.label)) {
+	const displayName = raw.name;
+
+	if (!isNonEmptyString(raw.label)) {
 		throw new Error(`Provider adapter "${displayName}" label must be a non-empty string`);
 	}
-	if (!isNonEmptyString(adapter.envVar)) {
+
+	if (!isNonEmptyString(raw.envVar)) {
 		throw new Error(`Provider adapter "${displayName}" envVar must be a non-empty string`);
 	}
-	if (!adapter.capabilities || typeof adapter.capabilities !== "object") {
-		throw new Error(`Provider adapter "${displayName}" must declare capabilities`);
+
+	if (raw.keyless !== undefined && typeof raw.keyless !== "boolean") {
+		throw new Error(`Provider adapter "${displayName}" keyless must be a boolean`);
 	}
-	if (typeof adapter.create !== "function") {
-		throw new Error(`Provider adapter "${displayName}" must provide a create() factory`);
+
+	const hasSearch = typeof raw.search === "function";
+	const hasFetch = typeof raw.fetch === "function";
+
+	if (raw.search !== undefined && !hasSearch) {
+		throw new Error(`Provider adapter "${displayName}" search must be a function`);
 	}
-	const caps = adapter.capabilities;
-	for (const key of CAPABILITY_KEYS) {
-		if (typeof caps[key] !== "boolean") {
-			throw new Error(`Provider "${displayName}" capabilities.${key} must be a boolean`);
+	if (raw.fetch !== undefined && !hasFetch) {
+		throw new Error(`Provider adapter "${displayName}" fetch must be a function`);
+	}
+
+	if (!hasSearch && !hasFetch) {
+		throw new Error(`Provider adapter "${displayName}" must implement at least one method: search or fetch`);
+	}
+
+	if (hasSearch) {
+		if (!isNonEmptyString(raw.searchHint)) {
+			throw new Error(`Provider adapter "${displayName}" implements search but declares no searchHint`);
 		}
+	} else if (raw.searchHint !== undefined) {
+		throw new Error(`Provider adapter "${displayName}" declares searchHint but does not implement search()`);
 	}
-	if (adapter.searchHint !== undefined && !isNonEmptyString(adapter.searchHint)) {
-		throw new Error(`Provider "${displayName}" searchHint must be a non-empty string`);
-	}
-	if (adapter.fetchHint !== undefined && !isNonEmptyString(adapter.fetchHint)) {
-		throw new Error(`Provider "${displayName}" fetchHint must be a non-empty string`);
-	}
-	if (
-		adapter.searchFallbackPriority !== undefined &&
-		(typeof adapter.searchFallbackPriority !== "number" || !Number.isFinite(adapter.searchFallbackPriority))
-	) {
-		throw new Error(`Provider "${displayName}" searchFallbackPriority must be a finite number`);
-	}
-	if (
-		adapter.fetchFallbackPriority !== undefined &&
-		(typeof adapter.fetchFallbackPriority !== "number" || !Number.isFinite(adapter.fetchFallbackPriority))
-	) {
-		throw new Error(`Provider "${displayName}" fetchFallbackPriority must be a finite number`);
-	}
-	if (adapter.verticals !== undefined) {
-		if (!Array.isArray(adapter.verticals) || adapter.verticals.some((v) => !isNonEmptyString(v))) {
-			throw new Error(`Provider "${displayName}" verticals must be an array of non-empty strings`);
+
+	if (hasFetch) {
+		if (!isNonEmptyString(raw.fetchHint)) {
+			throw new Error(`Provider adapter "${displayName}" implements fetch but declares no fetchHint`);
 		}
-	}
-	if (adapter.apiKeyRequired !== undefined && typeof adapter.apiKeyRequired !== "boolean") {
-		throw new Error(`Provider "${displayName}" apiKeyRequired must be a boolean`);
-	}
-	if (caps.generalSearch) {
-		if (!adapter.searchHint) throw new Error(`Provider "${displayName}" declares generalSearch but no searchHint`);
-		if (adapter.searchFallbackPriority === undefined) {
-			throw new Error(`Provider "${displayName}" declares generalSearch but no searchFallbackPriority`);
-		}
-	}
-	if (caps.contentExtraction) {
-		if (!adapter.fetchHint) throw new Error(`Provider "${displayName}" declares contentExtraction but no fetchHint`);
-		if (adapter.fetchFallbackPriority === undefined) {
-			throw new Error(`Provider "${displayName}" declares contentExtraction but no fetchFallbackPriority`);
-		}
-	}
-	if (!caps.generalSearch && adapter.searchHint !== undefined) {
-		throw new Error(`Provider "${displayName}" declares searchHint but generalSearch=false`);
-	}
-	if (!caps.generalSearch && adapter.searchFallbackPriority !== undefined) {
-		throw new Error(`Provider "${displayName}" declares searchFallbackPriority but generalSearch=false`);
-	}
-	if (adapter.verticals?.length && !caps.verticalSearch) {
-		throw new Error(`Provider "${displayName}" declares verticals but verticalSearch=false`);
+	} else if (raw.fetchHint !== undefined) {
+		throw new Error(`Provider adapter "${displayName}" declares fetchHint but does not implement fetch()`);
 	}
 }
 
@@ -160,19 +128,17 @@ export function validateProviderAdapter(adapter: ProviderAdapter): void {
  * Declare a provider adapter. Pure: validates and returns the adapter; the
  * loader (or a programmatic caller) registers it with registerProvider().
  */
-export function defineProvider(adapter: ProviderAdapter): ProviderAdapter {
+export function defineProvider(adapter: Provider): Provider {
 	validateProviderAdapter(adapter);
 	return adapter;
 }
 
 /**
- * Register a provider adapter. Built-ins register first at module load
- * (src/providers/index.ts); user adapters load later from
- * <agent dir>/extensions/pi-search/providers/, so a same-name adapter
- * overrides the earlier registration. A user registration can be removed
- * again with unregisterProvider(); built-in registrations cannot.
+ * Register a provider adapter. Built-ins register first at module load;
+ * user adapters load later, so a same-name adapter overrides the earlier registration.
+ * A user registration can be removed again with unregisterProvider(); built-ins cannot.
  */
-export function registerProvider(adapter: ProviderAdapter, source: "builtin" | "user" = "user"): void {
+export function registerProvider(adapter: Provider, source: "builtin" | "user" = "user"): void {
 	validateProviderAdapter(adapter);
 	if (source === "builtin") {
 		BUILTIN_PROVIDERS.set(adapter.name, adapter);
@@ -180,7 +146,7 @@ export function registerProvider(adapter: ProviderAdapter, source: "builtin" | "
 	registerInternal(adapter, source, true);
 }
 
-function registerInternal(adapter: ProviderAdapter, source: "builtin" | "user", warnOnReplace: boolean): void {
+function registerInternal(adapter: Provider, source: "builtin" | "user", warnOnReplace: boolean): void {
 	const index = PROVIDERS_MUTABLE.findIndex((m) => m.name === adapter.name);
 	if (index >= 0) {
 		if (warnOnReplace) {
@@ -190,7 +156,6 @@ function registerInternal(adapter: ProviderAdapter, source: "builtin" | "user", 
 	} else {
 		PROVIDERS_MUTABLE.push(adapter);
 	}
-	PROVIDER_FACTORIES.set(adapter.name, adapter.create);
 	PROVIDER_SOURCES.set(adapter.name, source);
 }
 
@@ -206,7 +171,6 @@ export function unregisterProvider(name: string): void {
 		return;
 	}
 	PROVIDER_SOURCES.delete(name);
-	PROVIDER_FACTORIES.delete(name);
 	const index = PROVIDERS_MUTABLE.findIndex((m) => m.name === name);
 	if (index >= 0) PROVIDERS_MUTABLE.splice(index, 1);
 }
