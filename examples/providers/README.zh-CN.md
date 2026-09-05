@@ -32,7 +32,7 @@
 ```sh
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 mkdir -p "$agent_dir/extensions/pi-search/providers"
-cp examples/search-providers/providers/deepseek.ts \
+cp examples/providers/deepseek.ts \
   "$agent_dir/extensions/pi-search/providers/deepseek.ts"
 ```
 

@@ -1,9 +1,9 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import deepseekAdapter from "../examples/search-providers/providers/deepseek.js";
-import doubaoAdapter from "../examples/search-providers/providers/doubao.js";
-import geminiAdapter from "../examples/search-providers/providers/gemini.js";
-import iflowAdapter from "../examples/search-providers/providers/iflow.js";
+import deepseekAdapter from "../examples/providers/deepseek.js";
+import doubaoAdapter from "../examples/providers/doubao.js";
+import geminiAdapter from "../examples/providers/gemini.js";
+import iflowAdapter from "../examples/providers/iflow.js";
 import { type Provider, validateProviderAdapter } from "../src/adapter-api.js";
 import { createProviderContext } from "../src/execution.js";
 

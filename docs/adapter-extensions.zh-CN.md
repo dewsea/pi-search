@@ -90,4 +90,4 @@ export default defineProvider({
 
 ## 参考模板
 
-包内 `src/providers/` 下的内置 Provider（`tavily.ts`、`anysearch.ts`、`jina.ts`、`exa.ts`、`serper.ts`、`firecrawl.ts`、`brave.ts`、`tinyfish.ts`、`serpapi.ts`）即此形态的标准参考模板。仓库内 [`examples/search-providers`](../examples/search-providers/) 还提供额外的 DeepSeek、豆包搜索、Gemini、iFlow 参考实现。
+包内 `src/providers/` 下的内置 Provider（`tavily.ts`、`anysearch.ts`、`jina.ts`、`exa.ts`、`serper.ts`、`firecrawl.ts`、`brave.ts`、`tinyfish.ts`、`serpapi.ts`）即此形态的标准参考模板。仓库内 [`examples/providers`](../examples/providers/) 还提供额外的 DeepSeek、豆包搜索、Gemini、iFlow 参考实现。

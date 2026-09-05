@@ -90,4 +90,4 @@ Adapters load at extension startup. On `/reload`, the extension re-runs discover
 
 ## Reference Templates
 
-The built-in providers under `src/providers/` (`tavily.ts`, `anysearch.ts`, `jina.ts`, `exa.ts`, `serper.ts`, `firecrawl.ts`, `brave.ts`, `tinyfish.ts`, `serpapi.ts`) serve as reference templates. Additional non-built-in examples (DeepSeek, Doubao, Gemini, iFlow) live under [`examples/search-providers`](../examples/search-providers/).
+The built-in providers under `src/providers/` (`tavily.ts`, `anysearch.ts`, `jina.ts`, `exa.ts`, `serper.ts`, `firecrawl.ts`, `brave.ts`, `tinyfish.ts`, `serpapi.ts`) serve as reference templates. Additional non-built-in examples (DeepSeek, Doubao, Gemini, iFlow) live under [`examples/providers`](../examples/providers/).
