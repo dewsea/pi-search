@@ -2,6 +2,9 @@
 
 [English](README.md)
 
+> [!NOTE]
+> 本项目已停止维护。
+
 为 [Pi](https://pi.dev) 提供精简高效的网页搜索与内容提取扩展，包含两个明确的工具（`search` 与 `fetch`）、一个交互式 `/search` 命令，并内置 9 家主流 Provider。
 
 [参与贡献](CONTRIBUTING.md) · [更新记录](CHANGELOG.md) · [安全策略](SECURITY.md)

@@ -2,6 +2,9 @@
 
 [简体中文](README.zh-CN.md)
 
+> [!NOTE]
+> This project is no longer maintained.
+
 A focused web search and content extraction extension for [Pi](https://pi.dev), providing two explicit tools (`search` and `fetch`), an interactive `/search` command, and 9 built-in providers.
 
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
